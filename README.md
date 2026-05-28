@@ -2,11 +2,11 @@
 
 <div align="center">
 
-[![Release](https://img.shields.io/github/v/release/Forza-Love/fh6-virtual_tcu?label=release&sort=semver)](https://github.com/Forza-Love/fh6-virtual_tcu/releases)
-[![CI](https://img.shields.io/github/actions/workflow/status/Forza-Love/fh6-virtual_tcu/ci.yml?branch=main&label=CI)](https://github.com/Forza-Love/fh6-virtual_tcu/actions/workflows/ci.yml)
-[![License](https://img.shields.io/github/license/Forza-Love/fh6-virtual_tcu)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/Aminiwow/fh6-virtual_tcu?label=release&sort=semver)](https://github.com/Aminiwow/fh6-virtual_tcu/releases)
+[![CI](https://img.shields.io/github/actions/workflow/status/Aminiwow/fh6-virtual_tcu/ci.yml?branch=main&label=CI)](https://github.com/Aminiwow/fh6-virtual_tcu/actions/workflows/ci.yml)
+[![License](https://img.shields.io/github/license/Aminiwow/fh6-virtual_tcu)](LICENSE)
 [![Discord](https://img.shields.io/discord/1508360305712037988?label=Discord&color=5865F2)](https://discordapp.com/invite/ghj3PGe9)
-[![GitHub stars](https://img.shields.io/github/stars/Forza-Love/fh6-virtual_tcu?style=social)](https://github.com/Forza-Love/fh6-virtual_tcu/stargazers)
+[![GitHub stars](https://img.shields.io/github/stars/Aminiwow/fh6-virtual_tcu?style=social)](https://github.com/Aminiwow/fh6-virtual_tcu/stargazers)
 
 <br>
 
@@ -73,7 +73,7 @@ Recommended for most users. Single installer that bundles the Python backend, pr
 
 ### 1. Download
 
-Open **[GitHub Releases](https://github.com/Forza-Love/fh6-virtual_tcu/releases)** and download the latest `VirtualTCU-*-win64.exe`.
+Open **[GitHub Releases](https://github.com/Aminiwow/fh6-virtual_tcu/releases)** and download the latest `VirtualTCU-*-win64.exe`.
 
 ### 2. Install & launch
 
@@ -103,7 +103,7 @@ Left-click the tray icon also opens **Settings**.
 
 By default, the TCU injects keyboard keys (**E** upshift / **Q** downshift). If you prefer virtual controller buttons instead (no keyboard bindings needed), switch to gamepad mode in **Settings → Extras → Output mode**.
 
-Gamepad mode requires the **[ViGEmBus](https://github.com/Forza-Love/fh6-virtual_tcu/raw/main/driver/ViGEmBusSetup_x64.msi) driver** — a one-time system install:
+Gamepad mode requires the **[ViGEmBus](https://github.com/Aminiwow/fh6-virtual_tcu/raw/main/driver/ViGEmBusSetup_x64.msi) driver** — a one-time system install:
 
 1. Download `ViGEmBus_Setup_*.exe` from the link above.
 2. Run as Administrator → accept the UAC prompt → install.
@@ -146,7 +146,7 @@ For users who want the original portable layout without Electron, HUD, or auto-u
 
 ### 1. Download
 
-`VirtualTCU-Backend-*-win64.zip` from **[GitHub Releases](https://github.com/Forza-Love/fh6-virtual_tcu/releases)**.
+`VirtualTCU-Backend-*-win64.zip` from **[GitHub Releases](https://github.com/Aminiwow/fh6-virtual_tcu/releases)**.
 
 ### 2. Extract
 
@@ -477,7 +477,7 @@ virtualTCU/
 
 ### Gamepad mode not working
 
-- Install the **[ViGEmBus](https://github.com/Forza-Love/fh6-virtual_tcu/raw/main/driver/ViGEmBusSetup_x64.msi) driver** → reboot Windows.
+- Install the **[ViGEmBus](https://github.com/Aminiwow/fh6-virtual_tcu/raw/main/driver/ViGEmBusSetup_x64.msi) driver** → reboot Windows.
 - If you already installed it, make sure you rebooted after installation.
 - Switch output mode to **Keyboard** in Settings → Extras if you don't want to install the driver.
 - The TCU automatically falls back to keyboard mode if the driver is missing.

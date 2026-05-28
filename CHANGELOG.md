@@ -12,6 +12,7 @@
 - **Default dashboard output** - `pnpm build:dashboard` now packages the static LAN dashboard directly into `virtual_tcu/web/dist/index.html`, so opening `http://<PC-LAN-IP>:8765` loads the forked dashboard by default.
 - **Compact remote layout** - removed the remote-only Drive Mode and Session blocks from the top-left column so the learning, drive-style, and power-band panels fit earlier on smaller screens.
 - **Read-only remote behavior** - remote dashboard remains display-only; changing modes and tuning still happens in the Electron Settings window.
+- **Forked update channel** - Windows installer auto-update now checks `Aminiwow/fh6-virtual_tcu` releases instead of the upstream repository.
 
 ### Fixed
 

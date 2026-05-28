@@ -21,7 +21,7 @@ import brandIconUrl from './assets/brand-icon.png'
 
 import { useUpdater } from './useUpdater'
 
-export const GITHUB_REPO_URL = 'https://github.com/Forza-Love/fh6-virtual_tcu'
+export const GITHUB_REPO_URL = 'https://github.com/Aminiwow/fh6-virtual_tcu'
 export { brandIconUrl }
 
 export type SettingsTabKey = 'overview' | 'config' | 'advanced' | 'stats' | 'history' | 'about'

@@ -91,7 +91,7 @@ class GamepadOutput(OutputInterface):
     """
 
     VIGEMBUS_URL = (
-        "https://github.com/Forza-Love/fh6-virtual_tcu/raw/main/driver/ViGEmBusSetup_x64.msi"
+        "https://github.com/Aminiwow/fh6-virtual_tcu/raw/main/driver/ViGEmBusSetup_x64.msi"
     )
 
     # How long a button is held down (seconds).

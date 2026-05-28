@@ -53,6 +53,6 @@ nsis:
 
 publish:
   - provider: github
-    owner: Forza-Love
+    owner: Aminiwow
     repo: fh6-virtual_tcu
     releaseType: release

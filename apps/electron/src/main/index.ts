@@ -573,7 +573,7 @@ function broadcastUpdater(payload: { kind: string; info?: unknown; error?: strin
 function setupAutoUpdater() {
   autoUpdater.setFeedURL({
     provider: 'github',
-    owner: 'Forza-Love',
+    owner: 'Aminiwow',
     repo: 'fh6-virtual_tcu',
   })
   autoUpdater.autoDownload = true
