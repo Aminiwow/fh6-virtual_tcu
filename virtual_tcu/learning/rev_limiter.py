@@ -19,7 +19,8 @@ class RevLimiterDetector:
     POST_SHIFT_IGNORE_S = 0.45
     WINDOW = 18
     STABLE_FRAMES = 10
-    MIN_PEAK_PCT = 0.82
+    MIN_PEAK_PCT = 0.90
+    MIN_POWER_CLIFF_PCT = 0.94
     PEAK_EPS = 55.0
     MIN_OSCILLATION = 120.0
     POWER_DROP_RATIO = 0.42
@@ -66,7 +67,8 @@ class RevLimiterDetector:
             self._drop_streak.pop(car, None)
             return
 
-        self._observe_power_cliff(car, td)
+        if rpm >= td.engine_max_rpm * self.MIN_POWER_CLIFF_PCT:
+            self._observe_power_cliff(car, td)
         self._observe_limiter_bounce(car, td)
 
     def _observe_power_cliff(self, car: tuple, td: Telemetry):

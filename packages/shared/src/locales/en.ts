@@ -84,7 +84,7 @@ export default {
     learning: 'learning…',
     rpmSuffix: '% RPM',
     hint:
-      'Learned per car at high throttle. Performance modes compare current-gear and next-gear power, with learned fuel-cut protection.',
+      'Learned per car at high throttle. Race keeps the WOT target as a high-RPM floor, then uses learned power and fuel-cut protection.',
   },
   logger: {
     title: 'Replay Logger',
@@ -164,7 +164,7 @@ export default {
     resetConfirm: 'Reset all settings to defaults?',
     autosave: 'Auto-saved to tcu_config.json',
     raceFallbackHint:
-      'Used only while gear ratios or power lookup are still learning. Once learned, Race shifts when the next gear can make equal or better power.',
+      'Race keeps this as the minimum full-throttle upshift target. Learning can hold longer or prevent fuel cut, but will not shift below this target.',
     watchdog: 'Engine appears stuck — telemetry not processing',
     corneringLock: 'Cornering Lock',
     launchControlFeat: 'Launch Control',

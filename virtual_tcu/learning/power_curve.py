@@ -264,6 +264,20 @@ class PowerCurveDetector:
             return None
         return (high - low) / (2.0 * step_rpm)
 
+    def max_high_power_rpm(self, car_key: tuple, min_peak_ratio: float = 0.80) -> float | None:
+        fit = self._fits.get(car_key)
+        if fit is None:
+            return None
+        pts = fit.points()
+        if not pts:
+            return None
+        peak = max(p[1] for p in pts)
+        if peak <= 0:
+            return None
+        threshold = peak * min_peak_ratio
+        high = [rpm for rpm, power, _torque in pts if power >= threshold]
+        return float(max(high)) if high else None
+
     def peak_torque_rpm(self, car_key: tuple) -> float | None:
         return self._peaks(car_key)[0]
 

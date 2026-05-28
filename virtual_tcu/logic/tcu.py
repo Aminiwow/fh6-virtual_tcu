@@ -29,7 +29,7 @@ from virtual_tcu.telemetry.model import Telemetry
 
 
 class TCULogic:
-    PROFILE_SCHEMA = "fh6-dataout-2026-05-15-v3-clean-power"
+    PROFILE_SCHEMA = "fh6-dataout-2026-05-15-v4-redline-guard"
 
     def __init__(
         self,
@@ -420,9 +420,6 @@ class TCULogic:
 
         if not in_shift_settle:
             self._rev_limiter.observe(td, self._last_downshift_time, now)
-        real_redline = self._rev_limiter.effective_redline(td)
-        if real_redline is not None and td.engine_max_rpm * 0.5 < real_redline <= td.engine_max_rpm:
-            td.engine_max_rpm = real_redline
 
         if self._config.get("feat_power_curve") and not in_shift_settle:
             self._power_curve.observe(td)
@@ -698,6 +695,9 @@ class TCULogic:
         if td.gear < 1 or td.gear > 3:
             self._slip_streak = 0
             return False
+        if self.mode == Mode.RACE and td.rpm_pct < 0.90:
+            self._slip_streak = 0
+            return False
         if td.throttle < 0.40:
             self._slip_streak = 0
             return False
@@ -709,7 +709,8 @@ class TCULogic:
         else:  # AWD or unknown
             slip = max(abs(td.slip_fl), abs(td.slip_fr), abs(td.slip_rl), abs(td.slip_rr))
 
-        if slip > 1.2:
+        threshold = 1.8 if self.mode == Mode.RACE else 1.2
+        if slip > threshold:
             self._slip_streak += 1
             return self._slip_streak >= 3
         else:
@@ -792,6 +793,8 @@ class TCULogic:
         performance_target = self._performance_upshift_target_pct(td, offset)
         if performance_target is not None:
             target_pct, source = performance_target
+            if self.mode == Mode.RACE:
+                target_pct = max(target_pct, self._config.get("race_up_wot", 94) / 100)
             target_pct = min(target_pct, self._upshift_ceiling_pct(td))
             if td.rpm_pct < target_pct:
                 return False
@@ -805,6 +808,8 @@ class TCULogic:
             offset=offset,
             blend_fallback=not mature_curve,
         )
+        if self.mode == Mode.RACE:
+            target_pct = max(target_pct, fallback)
         target_pct = min(target_pct, self._upshift_ceiling_pct(td))
         if td.rpm_pct < target_pct:
             return False
@@ -881,6 +886,9 @@ class TCULogic:
 
     def _upshift_ceiling_pct(self, td: Telemetry) -> float:
         learned = self._rev_limiter.effective_redline(td)
+        high_power_rpm = self._power_curve.max_high_power_rpm(td.car_key, min_peak_ratio=0.80)
+        if high_power_rpm is not None and td.engine_max_rpm > 0:
+            learned = max(learned or 0.0, high_power_rpm)
         if learned is not None and td.engine_max_rpm > 0:
             return max(0.50, min(0.992, (learned - 80.0) / td.engine_max_rpm))
         # Keep a small safety margin for unknown cars, but no longer cap at 92%;
