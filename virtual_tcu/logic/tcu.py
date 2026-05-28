@@ -29,7 +29,7 @@ from virtual_tcu.telemetry.model import Telemetry
 
 
 class TCULogic:
-    PROFILE_SCHEMA = "fh6-dataout-2026-05-15-v2-power-lookup"
+    PROFILE_SCHEMA = "fh6-dataout-2026-05-15-v3-clean-power"
 
     def __init__(
         self,
@@ -416,12 +416,15 @@ class TCULogic:
         self._update_attitude(td)
         self._calibrator.observe(td)
 
-        self._rev_limiter.observe(td, self._last_downshift_time, now)
+        in_shift_settle = now < self._lock_until or now < self._no_upshift_until
+
+        if not in_shift_settle:
+            self._rev_limiter.observe(td, self._last_downshift_time, now)
         real_redline = self._rev_limiter.effective_redline(td)
         if real_redline is not None and td.engine_max_rpm * 0.5 < real_redline <= td.engine_max_rpm:
             td.engine_max_rpm = real_redline
 
-        if self._config.get("feat_power_curve"):
+        if self._config.get("feat_power_curve") and not in_shift_settle:
             self._power_curve.observe(td)
         if self._config.get("feat_airtime_lock"):
             self._airtime.update(td)
@@ -760,8 +763,8 @@ class TCULogic:
         if td.gear <= 2:
             return False
 
-        peak_torque = self._power_curve.peak_torque_rpm(td.car_key)
-        threshold = peak_torque - 0.10 if peak_torque is not None else 0.55
+        peak_torque_abs = self._power_curve.peak_torque_abs_rpm(td.car_key)
+        threshold = peak_torque_abs / td.engine_max_rpm - 0.10 if peak_torque_abs is not None else 0.55
         if climbing:
             threshold += 0.08
 
@@ -822,8 +825,9 @@ class TCULogic:
             return None
 
         ceiling_pct = self._upshift_ceiling_pct(td)
-        peak_pct = self._power_curve.peak_power_rpm(td.car_key)
-        search_start = max(0.45, (peak_pct or 0.72) - 0.08)
+        peak_abs_rpm = self._power_curve.peak_power_abs_rpm(td.car_key)
+        peak_pct = peak_abs_rpm / td.engine_max_rpm if peak_abs_rpm is not None else None
+        search_start = max(0.45, (peak_pct or 0.72) - 0.06)
         search_end = max(search_start, min(ceiling_pct, 0.992))
         step_pct = max(0.003, 50.0 / td.engine_max_rpm)
         first_cross: float | None = None
@@ -1044,14 +1048,13 @@ class TCULogic:
         if speed < 10.0:
             return 1
 
-        peak_torque = self._power_curve.peak_torque_rpm(td.car_key)
-        peak_power = self._power_curve.peak_power_rpm(td.car_key)
+        peak_torque = self._power_curve.peak_torque_abs_rpm(td.car_key)
+        peak_power = self._power_curve.peak_power_abs_rpm(td.car_key)
         if peak_torque is None or peak_power is None:
             target_rpm = td.engine_max_rpm * 0.70
         else:
             peak_power = max(peak_power, peak_torque)
-            target_pct = peak_torque + (peak_power - peak_torque) * 0.6
-            target_rpm = td.engine_max_rpm * target_pct
+            target_rpm = peak_torque + (peak_power - peak_torque) * 0.6
 
         best_gear = td.gear
         best_diff = float("inf")

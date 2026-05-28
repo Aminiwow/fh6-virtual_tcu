@@ -73,10 +73,12 @@ class _PowerBin:
 
 class _PowerCurveFit:
     BIN_RPM = 50
+    CUT_POWER_RATIO = 0.72
 
     def __init__(self):
         self.max_rpm = 0.0
         self.bins: dict[int, _PowerBin] = {}
+        self.best_power_hp = 0.0
 
     @staticmethod
     def _bin_rpm(rpm: float) -> int:
@@ -85,7 +87,14 @@ class _PowerCurveFit:
     def add(self, rpm: float, max_rpm: float, power_hp: float, torque_nm: float):
         if rpm <= 0 or power_hp <= 0 or torque_nm <= 0:
             return
+        if (
+            self.best_power_hp > 0
+            and rpm >= max_rpm * 0.78
+            and power_hp < self.best_power_hp * self.CUT_POWER_RATIO
+        ):
+            return
         self.max_rpm = max(self.max_rpm, max_rpm)
+        self.best_power_hp = max(self.best_power_hp, power_hp)
         key = self._bin_rpm(rpm)
         self.bins.setdefault(key, _PowerBin()).add(power_hp, torque_nm)
 
@@ -115,6 +124,7 @@ class _PowerCurveFit:
         return {
             "format": "power_bins_v2",
             "max_rpm": self.max_rpm,
+            "best_power_hp": self.best_power_hp,
             "bin_rpm": self.BIN_RPM,
             "bins": {str(rpm): bin_.to_dict() for rpm, bin_ in self.bins.items()},
         }
@@ -123,6 +133,7 @@ class _PowerCurveFit:
     def from_dict(cls, data: dict) -> "_PowerCurveFit":
         fit = cls()
         fit.max_rpm = float(data.get("max_rpm", 0.0))
+        fit.best_power_hp = float(data.get("best_power_hp", 0.0))
         bins = data.get("bins", {})
         if isinstance(bins, dict):
             for rpm, bin_data in bins.items():
@@ -132,6 +143,9 @@ class _PowerCurveFit:
                     fit.bins[int(rpm)] = _PowerBin.from_dict(bin_data)
                 except (TypeError, ValueError):
                     continue
+        if fit.best_power_hp <= 0:
+            powers = [p[1] for p in fit.points()]
+            fit.best_power_hp = max(powers) if powers else 0.0
         return fit
 
 
@@ -169,6 +183,8 @@ class PowerCurveDetector:
         if ck[0] <= 0 or td.gear < 1:
             return
         if td.throttle < self.MIN_THROTTLE or td.torque_nm <= 0 or td.is_shifting:
+            return
+        if td.clutch_raw > 5:
             return
         if td.current_rpm < 500 or td.current_rpm > td.engine_max_rpm * 1.02:
             return
@@ -253,6 +269,13 @@ class PowerCurveDetector:
 
     def peak_power_rpm(self, car_key: tuple) -> float | None:
         return self._peaks(car_key)[1]
+
+    def peak_torque_abs_rpm(self, car_key: tuple) -> float | None:
+        fit = self._fits.get(car_key)
+        if fit is None or fit.max_rpm <= 0:
+            return None
+        pct = self.peak_torque_rpm(car_key)
+        return pct * fit.max_rpm if pct is not None else None
 
     def peak_power_abs_rpm(self, car_key: tuple) -> float | None:
         pct = self.peak_power_rpm(car_key)
