@@ -46,7 +46,7 @@ export const SETTING_SLIDERS: SliderDef[] = [
   {
     key: 'race_up_wot',
     i18nKey: 'raceUpWot',
-    min: 98,
+    min: 88,
     max: 99,
     panel: 'settings',
     hintKey: 'raceFallbackHint',

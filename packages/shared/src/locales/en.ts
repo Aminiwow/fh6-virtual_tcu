@@ -84,7 +84,7 @@ export default {
     learning: 'learning…',
     rpmSuffix: '% RPM',
     hint:
-      'Learned per car at high throttle. Race mode prioritizes the red zone; learning is used by other performance modes and safeguards.',
+      'Learned per car at high throttle. Race mode shifts just before the learned limiter and otherwise uses the fallback target.',
   },
   logger: {
     title: 'Replay Logger',
@@ -164,7 +164,7 @@ export default {
     resetConfirm: 'Reset all settings to defaults?',
     autosave: 'Auto-saved to tcu_config.json',
     raceFallbackHint:
-      'Race redline target. Race does not use power-curve or wheelspin logic to upshift early.',
+      'Exploration target while the real limiter is still learning. Once learned, Race shifts just before that per-car ceiling.',
     watchdog: 'Engine appears stuck — telemetry not processing',
     corneringLock: 'Cornering Lock',
     launchControlFeat: 'Launch Control',
@@ -183,7 +183,7 @@ export default {
     launchRpm: 'Target RPM',
     comfortUpWot: 'Upshift WOT',
     dynamicUpWot: 'Upshift WOT',
-    raceUpWot: 'Race redline target',
+    raceUpWot: 'Race fallback target',
     offroadUpWot: 'Upshift WOT (hold gear)',
     offroadDownRpm: 'Torque downshift RPM',
     brakeThr: 'Brake threshold',

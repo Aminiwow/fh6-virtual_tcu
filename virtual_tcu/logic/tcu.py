@@ -29,7 +29,7 @@ from virtual_tcu.telemetry.model import Telemetry
 
 
 class TCULogic:
-    PROFILE_SCHEMA = "fh6-dataout-2026-05-15-v5-race-redline"
+    PROFILE_SCHEMA = "fh6-dataout-2026-05-15-v7-smart-limiter"
 
     def __init__(
         self,
@@ -414,11 +414,30 @@ class TCULogic:
         if g_total > self._peak_g:
             self._peak_g = g_total
 
+        ck = td.car_key
+        if ck[0] > 0 and ck != self._current_car_key:
+            # Save previous car's learned state before switching.
+            if self._current_car_key is not None:
+                self.save_profiles()
+            self._current_car_key = ck
+            self._peak_rpm = 0.0
+            self._peak_g = 0.0
+            # Reset per-tune learning data so stale ratios / curves from a
+            # different build don't poison shift decisions.
+            self._calibrator._ratios.pop(ck, None)
+            self._calibrator._counts.pop(ck, None)
+            self._calibrator._wheel_radius.pop(ck, None)
+            self._calibrator._wheel_radius_counts.pop(ck, None)
+            self._power_curve._fits.pop(ck, None)
+            self._rev_limiter.reset_car(ck)
+            # Restore previously-saved learning data for this car+tune.
+            self._load_profiles(ck)
+
         self._update_turbo(td, dt)
         self._update_attitude(td)
         self._calibrator.observe(td)
 
-        in_shift_settle = now < self._lock_until or now < self._no_upshift_until
+        in_shift_settle = now < self._lock_until
 
         if not in_shift_settle:
             self._rev_limiter.observe(td, self._last_downshift_time, now)
@@ -459,27 +478,6 @@ class TCULogic:
             self._tcu_state = "REVERSE"
             self._tcu_state_sub = "exiting R..."
             return
-
-        ck = td.car_key
-        if ck[0] > 0 and ck != self._current_car_key:
-            # Save previous car's learned state before switching.
-            if self._current_car_key is not None:
-                self.save_profiles()
-            self._current_car_key = ck
-            self._peak_rpm = 0.0
-            self._peak_g = 0.0
-            # Reset per-tune learning data so stale ratios / curves from a
-            # different build don't poison shift decisions.
-            self._calibrator._ratios.pop(ck, None)
-            self._calibrator._counts.pop(ck, None)
-            self._calibrator._wheel_radius.pop(ck, None)
-            self._calibrator._wheel_radius_counts.pop(ck, None)
-            self._power_curve._fits.pop(ck, None)
-            self._rev_limiter._redline.pop(ck, None)
-            self._rev_limiter._rpm_window.pop(ck, None)
-            self._rev_limiter._peak_hold.pop(ck, None)
-            # Restore previously-saved learning data for this car+tune.
-            self._load_profiles(ck)
 
         current_mode = self.mode
         if current_mode != self._last_processed_mode:
@@ -796,10 +794,10 @@ class TCULogic:
             return False
 
         if self.mode == Mode.RACE:
-            target_pct = self._race_redline_target_pct()
+            target_pct, source = self._race_upshift_target_pct(td)
             if td.rpm_pct < target_pct:
                 return False
-            return self._shift_up(td, 300, "UPSHIFT", "race redline")
+            return self._shift_up(td, 300, "UPSHIFT", source)
 
         performance_target = self._performance_upshift_target_pct(td, offset)
         if performance_target is not None:
@@ -809,7 +807,7 @@ class TCULogic:
                 return False
             return self._shift_up(td, 300, "UPSHIFT", source)
 
-        fallback = self._config.get("race_up_wot", 94) / 100
+        fallback = self._mode_upshift_fallback_pct()
         mature_curve = self._power_curve.has_mature_data(td.car_key)
         target_pct = self._power_curve.optimal_upshift_rpm(
             td,
@@ -822,9 +820,24 @@ class TCULogic:
             return False
         return self._shift_up(td, 300, "UPSHIFT", "in band")
 
-    def _race_redline_target_pct(self) -> float:
+    def _race_upshift_target_pct(self, td: Telemetry) -> tuple[float, str]:
+        if td.engine_max_rpm <= 0:
+            return 0.98, "race fallback"
+
+        learned = self._rev_limiter.effective_redline(td)
+        if learned is not None:
+            target = max(0.60, (learned - 180.0) / td.engine_max_rpm)
+            return min(target, 0.985), "learned limiter"
+
         configured = self._config.get("race_up_wot", 98) / 100
-        return max(0.98, min(0.995, configured))
+        return max(0.88, min(0.99, configured)), "race fallback"
+
+    def _mode_upshift_fallback_pct(self) -> float:
+        if self.mode == Mode.DYNAMIC:
+            return self._config.get("dynamic_up_wot", 82) / 100
+        if self.mode == Mode.OFFROAD:
+            return self._config.get("offroad_up_wot", 90) / 100
+        return self._config.get("race_up_wot", 98) / 100
 
     def _performance_upshift_target_pct(self, td: Telemetry, offset: float) -> tuple[float, str] | None:
         if not self._config.get("feat_power_curve"):
@@ -992,7 +1005,7 @@ class TCULogic:
         base_mode = self._last_auto_mode
 
         if base_mode == Mode.RACE:
-            up_pct = self._race_redline_target_pct()
+            up_pct, _source = self._race_upshift_target_pct(td)
         elif base_mode == Mode.DYNAMIC:
             up_pct = self._power_curve.optimal_upshift_rpm(
                 td, fallback=self._config.get("dynamic_up_wot", 82) / 100, offset=0.05

@@ -18,25 +18,39 @@ class RevLimiterDetector:
     MIN_THROTTLE = 0.86
     POST_SHIFT_IGNORE_S = 0.45
     WINDOW = 18
-    STABLE_FRAMES = 10
-    MIN_PEAK_PCT = 0.90
-    MIN_POWER_CLIFF_PCT = 0.94
+    STABLE_FRAMES = 6
+    MIN_PEAK_PCT = 0.84
+    MIN_POWER_CLIFF_PCT = 0.84
+    MAX_SURFACE_RUMBLE = 0.20
     PEAK_EPS = 55.0
     MIN_OSCILLATION = 120.0
-    POWER_DROP_RATIO = 0.42
-    POWER_DROP_FRAMES = 2
+    POWER_DROP_RATIO = 0.78
+    POWER_DROP_FRAMES = 3
+    MAX_RPM_GROWTH = 90.0
 
     def __init__(self):
         self._redline: dict[tuple, float] = {}
         self._rpm_window: dict[tuple, deque[float]] = {}
         self._peak_hold: dict[tuple, tuple] = {}
         self._high_power_peak: dict[tuple, float] = {}
+        self._high_rpm_seen: dict[tuple, float] = {}
         self._drop_streak: dict[tuple, int] = {}
+        self._lower_candidate: dict[tuple, tuple[float, int]] = {}
 
     def _reset_transient(self, car: tuple):
         self._rpm_window.pop(car, None)
         self._peak_hold.pop(car, None)
         self._drop_streak.pop(car, None)
+        self._lower_candidate.pop(car, None)
+
+    def reset_car(self, car: tuple):
+        self._redline.pop(car, None)
+        self._rpm_window.pop(car, None)
+        self._peak_hold.pop(car, None)
+        self._high_power_peak.pop(car, None)
+        self._high_rpm_seen.pop(car, None)
+        self._drop_streak.pop(car, None)
+        self._lower_candidate.pop(car, None)
 
     @staticmethod
     def _power_hp(td: Telemetry) -> float:
@@ -54,7 +68,9 @@ class RevLimiterDetector:
             or td.engine_max_rpm <= 0
             or td.throttle < self.MIN_THROTTLE
             or now - last_downshift_time < self.POST_SHIFT_IGNORE_S
+            or td.clutch_raw > 5
             or td.max_combined_slip > 1.2
+            or td.max_surface_rumble > self.MAX_SURFACE_RUMBLE
             or not td.is_grounded
             or td.any_puddle
         ):
@@ -65,30 +81,39 @@ class RevLimiterDetector:
         high_rpm = rpm >= td.engine_max_rpm * self.MIN_PEAK_PCT
         if not high_rpm:
             self._drop_streak.pop(car, None)
+            self._high_rpm_seen.pop(car, None)
+            self._lower_candidate.pop(car, None)
             return
 
+        self._high_rpm_seen[car] = max(self._high_rpm_seen.get(car, 0.0), rpm)
         if rpm >= td.engine_max_rpm * self.MIN_POWER_CLIFF_PCT:
             self._observe_power_cliff(car, td)
         self._observe_limiter_bounce(car, td)
 
     def _observe_power_cliff(self, car: tuple, td: Telemetry):
+        has_raw_power = abs(td.power_w) > 1.0
+        raw_power_hp = td.power_w / W_PER_HP if has_raw_power else None
         power_hp = self._power_hp(td)
-        if power_hp <= 0:
+        current_peak = self._high_power_peak.get(car, 0.0)
+        if power_hp <= 0 and current_peak <= 0:
             return
 
-        current_peak = self._high_power_peak.get(car, 0.0)
         if power_hp > current_peak:
             self._high_power_peak[car] = power_hp
             self._drop_streak.pop(car, None)
             return
 
         # Once high-rpm power has been observed, a sharp full-throttle drop is
-        # usually fuel cut. Normal post-peak roll-off is much gentler.
-        if current_peak >= 50.0 and power_hp <= current_peak * self.POWER_DROP_RATIO:
+        # usually fuel cut. FH6 often reports negative torque while the engine
+        # bounces below nominal max RPM, so learn from the first clean drop.
+        hard_cut = has_raw_power and raw_power_hp is not None and raw_power_hp <= 5.0
+        soft_cliff = current_peak >= 50.0 and power_hp <= current_peak * self.POWER_DROP_RATIO
+        if current_peak >= 50.0 and (hard_cut or soft_cliff):
             streak = self._drop_streak.get(car, 0) + 1
             self._drop_streak[car] = streak
-            if streak >= self.POWER_DROP_FRAMES:
-                self._learn(car, td.current_rpm)
+            needed = 1 if hard_cut else self.POWER_DROP_FRAMES
+            if streak >= needed:
+                self._learn(car, max(td.current_rpm, self._high_rpm_seen.get(car, 0.0)))
         else:
             self._drop_streak.pop(car, None)
 
@@ -99,7 +124,12 @@ class RevLimiterDetector:
             return
 
         wmax, wmin = max(win), min(win)
-        if wmax < td.engine_max_rpm * self.MIN_PEAK_PCT or (wmax - wmin) < self.MIN_OSCILLATION:
+        rpm_growth = win[-1] - win[0]
+        if (
+            wmax < td.engine_max_rpm * self.MIN_PEAK_PCT
+            or (wmax - wmin) < self.MIN_OSCILLATION
+            or abs(rpm_growth) > self.MAX_RPM_GROWTH
+        ):
             self._peak_hold.pop(car, None)
             return
 
@@ -121,14 +151,25 @@ class RevLimiterDetector:
         if current is None:
             self._redline[car] = float(redline)
             return
-        # Ignore one-frame low estimates, but allow the ceiling to move in
-        # both directions as stronger evidence arrives.
-        if redline < current * 0.92:
+        # Keep the learned value at the high edge of limiter contact. Lower
+        # RPM negative-power frames are usually the bounce after fuel cut, not
+        # the real shift target.
+        lower_tolerance = 220.0
+        if redline >= current - lower_tolerance:
+            self._redline[car] = max(current, float(redline))
+            self._lower_candidate.pop(car, None)
             return
-        if redline > current:
-            self._redline[car] = current * 0.80 + float(redline) * 0.20
+
+        candidate, count = self._lower_candidate.get(car, (redline, 0))
+        if abs(candidate - redline) <= lower_tolerance:
+            count += 1
+            candidate = max(candidate, redline)
         else:
-            self._redline[car] = current * 0.65 + float(redline) * 0.35
+            candidate, count = redline, 1
+        self._lower_candidate[car] = (candidate, count)
+        if count >= 6:
+            self._redline[car] = float(candidate)
+            self._lower_candidate.pop(car, None)
 
     def effective_redline(self, td: Telemetry) -> float | None:
         return self._redline.get(td.car_key)

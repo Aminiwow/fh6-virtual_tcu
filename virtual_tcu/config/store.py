@@ -43,9 +43,6 @@ class ConfigStore:
                             v = bool(v)
                     elif isinstance(default_v, int):
                         v = int(float(v))
-                        if k == "race_up_wot" and v < 98:
-                            v = 98
-                            config_changed = True
                     elif isinstance(default_v, float):
                         v = float(v)
                     self.data[k] = v
@@ -144,8 +141,6 @@ class ConfigStore:
                     value = max(0, min(100, value))
                 else:
                     value = max(1000, min(10000, value))
-                if key == "race_up_wot":
-                    value = max(98, min(99, value))
             elif isinstance(default_v, float):
                 value = float(value)
             self.data[key] = value
