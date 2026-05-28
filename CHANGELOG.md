@@ -1,5 +1,23 @@
 # Changelog
 
+## [13.1.2] - 2026-05-28
+
+### Added
+
+- **Chinese LAN dashboard fork** - the browser dashboard served at `:8765` is now a lightweight, read-only Chinese telemetry panel designed for iPad, iPhone, Mac, and other LAN clients.
+- **Remote-safe telemetry layout** - shows gear, RPM LEDs, speed, power, torque, pedals, TCU state, live chart, G-meter, vehicle learning, power band, stats, and shift history without requiring the Vue runtime bundle.
+
+### Changed
+
+- **Default dashboard output** - `pnpm build:dashboard` now packages the static LAN dashboard directly into `virtual_tcu/web/dist/index.html`, so opening `http://<PC-LAN-IP>:8765` loads the forked dashboard by default.
+- **Compact remote layout** - removed the remote-only Drive Mode and Session blocks from the top-left column so the learning, drive-style, and power-band panels fit earlier on smaller screens.
+- **Read-only remote behavior** - remote dashboard remains display-only; changing modes and tuning still happens in the Electron Settings window.
+
+### Fixed
+
+- **Remote black screen workaround** - avoids the Vue/Vite dashboard bundle that could render as a black page on remote browsers while preserving WebSocket telemetry updates.
+- **Missing-panel resilience** - DOM update helpers now skip absent elements, so hiding/removing optional panels does not stop the dashboard script.
+
 ## [13.1.1] — 2026-05-27
 
 ### Added

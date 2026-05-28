@@ -1,23 +1,30 @@
-# Virtual TCU — Dashboard
+# Virtual TCU - LAN Dashboard
 
-Vue 3 dashboard for Virtual TCU. Built output is served by the Python app from `virtual_tcu/web/dist/`.
+This fork serves a lightweight Chinese read-only dashboard at `:8765`.
 
-## Stack
+The dashboard is intentionally implemented as a static `index.html` instead of the original Vue/Vite browser dashboard. This keeps LAN clients such as iPad, iPhone, Mac Chrome, and other browsers from hitting the remote black-screen issue while preserving WebSocket telemetry updates.
 
-- Vue 3 + Vite + TypeScript + **Tailwind CSS v4** + Naive UI
-- [vue-i18n](https://vue-i18n.intlify.dev/) — English + 简体中文
-- ESLint — [@antfu/eslint-config](https://github.com/antfu/eslint-config)
-- Prettier — code formatting
+## What It Shows
+
+- Gear, speed, RPM, power, torque, and pedal input
+- 20-segment RPM LED bar
+- TCU state, airborne/yaw/watchdog flags
+- Live RPM/throttle/brake/speed chart
+- G-meter and grip usage
+- Vehicle learning, drive style, and power-band status
+- Session stats and shift history
+
+The dashboard is display-only. Use the Electron Settings window for tuning, drive modes, network settings, output mode, and logging controls.
 
 ## Development
 
-1. Start the TCU backend (UDP + WebSocket on port 8765):
+1. Start the backend:
 
    ```bash
    python -m virtual_tcu
    ```
 
-2. In another terminal:
+2. Run the dashboard dev server:
 
    ```bash
    cd apps/dashboard
@@ -25,9 +32,11 @@ Vue 3 dashboard for Virtual TCU. Built output is served by the Python app from `
    pnpm dev
    ```
 
-3. Open http://127.0.0.1:5173 — Vite proxies `/ws` to the backend.
+3. Open `http://127.0.0.1:5173`.
 
-## Production build
+Vite serves `index.html` and proxies `/ws` to `http://127.0.0.1:8765`.
+
+## Production Build
 
 ```bash
 cd apps/dashboard
@@ -35,15 +44,18 @@ pnpm install
 pnpm build
 ```
 
-This writes to `virtual_tcu/web/dist/`. Restart `python -m virtual_tcu` and open http://127.0.0.1:8765.
+The build writes `virtual_tcu/web/dist/index.html`. Packaged releases include this file automatically.
 
-If `dist/` is missing, the backend falls back to the legacy `index.html`.
+## LAN Use
 
-## Scripts
+In Virtual TCU Settings, set **Web bind address** to `0.0.0.0`, then open:
 
-| Command | Description |
-|---------|-------------|
-| `pnpm dev` | Vite dev server |
-| `pnpm build` | Typecheck + production build |
-| `pnpm lint` | ESLint |
-| `pnpm format` | Prettier write |
+```text
+http://<your-PC-LAN-IP>:8765
+```
+
+Example:
+
+```text
+http://192.168.18.58:8765
+```

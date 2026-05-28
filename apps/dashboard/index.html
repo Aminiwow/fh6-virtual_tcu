@@ -3,10 +3,1080 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Virtual TCU — Forza Horizon 6</title>
+    <title>Virtual TCU - 局域网仪表盘</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #050505;
+        --panel: #0c0d10;
+        --panel-2: #15171c;
+        --border: #2b2f36;
+        --text: #f5f5f5;
+        --muted: #9ca3af;
+        --dim: #6b7280;
+        --green: #22c55e;
+        --blue: #3b82f6;
+        --yellow: #eab308;
+        --red: #ef4444;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        min-height: 100%;
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+
+      body {
+        display: flex;
+        flex-direction: column;
+      }
+
+      header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 14px 20px;
+        border-bottom: 1px solid var(--border);
+        background: #08090b;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: 20px;
+        line-height: 1.2;
+      }
+
+      .status {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        color: var(--muted);
+        font-size: 14px;
+        white-space: nowrap;
+      }
+
+      .dot {
+        width: 9px;
+        height: 9px;
+        border-radius: 999px;
+        background: var(--red);
+      }
+
+      .dot.live {
+        background: var(--green);
+        box-shadow: 0 0 10px var(--green);
+      }
+
+      main {
+        display: grid;
+        grid-template-columns: 280px minmax(0, 1fr) 320px;
+        gap: 1px;
+        flex: 1;
+        background: var(--border);
+      }
+
+      section {
+        min-width: 0;
+        background: var(--bg);
+        padding: 16px;
+      }
+
+      .card {
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: var(--panel);
+        padding: 14px;
+      }
+
+      .stack {
+        display: grid;
+        gap: 12px;
+      }
+
+      .label {
+        color: var(--dim);
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .mode-grid {
+        display: grid;
+        gap: 8px;
+      }
+
+      .mode {
+        display: flex;
+        justify-content: space-between;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 10px 12px;
+        color: var(--dim);
+        background: var(--panel);
+        font-size: 13px;
+        font-weight: 700;
+      }
+
+      .mode.active {
+        color: var(--text);
+        border-color: var(--green);
+        background: #102016;
+      }
+
+      .rpm-leds {
+        display: grid;
+        grid-template-columns: repeat(20, minmax(0, 1fr));
+        gap: 4px;
+        height: 28px;
+      }
+
+      .led {
+        border: 1px solid #000;
+        border-radius: 3px;
+        background: var(--panel-2);
+      }
+
+      .led.on.green {
+        background: var(--green);
+        box-shadow: 0 0 8px var(--green);
+      }
+
+      .led.on.yellow {
+        background: var(--yellow);
+        box-shadow: 0 0 8px var(--yellow);
+      }
+
+      .led.on.red {
+        background: var(--red);
+        box-shadow: 0 0 8px var(--red);
+      }
+
+      .led.on.blue {
+        background: var(--blue);
+        box-shadow: 0 0 8px var(--blue);
+      }
+
+      .hero {
+        display: grid;
+        grid-template-columns: 220px minmax(0, 1fr) 170px;
+        gap: 12px;
+      }
+
+      .gear {
+        display: grid;
+        place-items: center;
+        min-height: 250px;
+        font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+        font-size: 128px;
+        font-weight: 900;
+        line-height: 1;
+      }
+
+      .big-num {
+        font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+        font-size: 56px;
+        font-weight: 800;
+        line-height: 1;
+      }
+
+      .rpm {
+        font-size: 72px;
+      }
+
+      .metrics {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .bar-row {
+        display: grid;
+        grid-template-columns: 52px 1fr 48px;
+        align-items: center;
+        gap: 10px;
+        margin: 12px 0;
+      }
+
+      .bar {
+        height: 12px;
+        overflow: hidden;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        background: var(--panel-2);
+      }
+
+      .bar > div {
+        height: 100%;
+        width: 0%;
+        background: var(--green);
+      }
+
+      .state {
+        min-height: 110px;
+      }
+
+      .state-main {
+        margin-top: 12px;
+        font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+        font-size: 28px;
+        font-weight: 800;
+      }
+
+      .state-sub {
+        color: var(--muted);
+        font-size: 13px;
+        font-weight: 700;
+        text-transform: uppercase;
+      }
+
+      .kv {
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 9px 0;
+        border-bottom: 1px dotted var(--border);
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .kv strong {
+        color: var(--text);
+        font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+      }
+
+      .history {
+        display: grid;
+        gap: 8px;
+        max-height: 360px;
+        overflow: auto;
+      }
+
+      .history-item {
+        display: grid;
+        grid-template-columns: 40px 1fr auto;
+        gap: 8px;
+        align-items: center;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        background: var(--panel);
+        padding: 8px 10px;
+        font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+        font-size: 12px;
+      }
+
+      .mini-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+      }
+
+      .mini {
+        border-radius: 6px;
+        background: var(--panel);
+        padding: 10px;
+      }
+
+      .mini strong {
+        display: block;
+        margin-top: 3px;
+        font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+        font-size: 17px;
+      }
+
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        border: 1px solid #3f4a55;
+        border-radius: 999px;
+        padding: 4px 9px;
+        color: var(--text);
+        background: var(--panel-2);
+        font-size: 11px;
+        font-weight: 800;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+
+      .pill.green {
+        border-color: #14532d;
+        color: var(--green);
+        background: #052e16;
+      }
+
+      .pill.yellow {
+        border-color: #713f12;
+        color: var(--yellow);
+        background: #2b1d05;
+      }
+
+      .sport-track {
+        position: relative;
+        height: 8px;
+        overflow: hidden;
+        border-radius: 999px;
+        background: linear-gradient(90deg, var(--blue), #a855f7, var(--green));
+      }
+
+      .sport-mask {
+        position: absolute;
+        top: 0;
+        right: 0;
+        bottom: 0;
+        width: 100%;
+        background: rgba(0, 0, 0, 0.72);
+      }
+
+      .flags {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 10px;
+      }
+
+      .flag {
+        display: none;
+        border-radius: 4px;
+        padding: 4px 7px;
+        color: #111;
+        background: var(--yellow);
+        font-size: 11px;
+        font-weight: 900;
+        letter-spacing: 0.06em;
+      }
+
+      .flag.on {
+        display: inline-block;
+      }
+
+      .lower-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 210px 210px;
+        gap: 12px;
+      }
+
+      .g-meter {
+        position: relative;
+        width: 120px;
+        height: 120px;
+        margin: 14px auto 8px;
+        border: 2px solid var(--border);
+        border-radius: 999px;
+        background: radial-gradient(circle, var(--panel-2), #07080a);
+      }
+
+      .g-meter::before,
+      .g-meter::after {
+        content: "";
+        position: absolute;
+        background: var(--border);
+      }
+
+      .g-meter::before {
+        top: 50%;
+        left: 0;
+        width: 100%;
+        height: 1px;
+      }
+
+      .g-meter::after {
+        top: 0;
+        left: 50%;
+        width: 1px;
+        height: 100%;
+      }
+
+      .g-ball {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        width: 14px;
+        height: 14px;
+        border-radius: 999px;
+        background: var(--yellow);
+        box-shadow: 0 0 12px var(--yellow);
+        transform: translate(-50%, -50%);
+      }
+
+      .chart {
+        display: flex;
+        min-height: 210px;
+        flex-direction: column;
+      }
+
+      .chart-head {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        border-bottom: 1px solid var(--border);
+        padding-bottom: 9px;
+      }
+
+      .legend {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        color: var(--muted);
+        font-size: 11px;
+      }
+
+      .legend span::before {
+        content: "";
+        display: inline-block;
+        width: 8px;
+        height: 8px;
+        margin-right: 5px;
+        border-radius: 999px;
+        background: currentColor;
+      }
+
+      canvas {
+        width: 100%;
+        min-height: 160px;
+        flex: 1;
+      }
+
+      .stat-title {
+        margin: 10px 0 4px;
+        color: var(--dim);
+        font-size: 11px;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .log {
+        max-height: 120px;
+        overflow: auto;
+        color: var(--dim);
+        font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+        font-size: 11px;
+        white-space: pre-wrap;
+      }
+
+      @media (max-width: 1100px) {
+        main,
+        .hero,
+        .lower-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .gear {
+          min-height: 180px;
+          font-size: 96px;
+        }
+      }
+
+      @media (max-width: 700px) {
+        header {
+          align-items: flex-start;
+          flex-direction: column;
+          padding: 12px;
+        }
+
+        section {
+          padding: 12px;
+        }
+
+        .metrics {
+          grid-template-columns: 1fr;
+        }
+
+        .rpm {
+          font-size: 48px;
+        }
+      }
+    </style>
   </head>
   <body>
-    <div id="app"></div>
-    <script type="module" src="/src/main.ts"></script>
+    <header>
+      <h1>Virtual TCU 局域网仪表盘</h1>
+      <div class="status"><span id="dot" class="dot"></span><span id="connection">未连接</span></div>
+    </header>
+
+    <main>
+      <section class="stack">
+        <div class="card stack">
+          <div class="label">车辆学习</div>
+          <div><span id="calibrationPill" class="pill yellow">学习中</span></div>
+          <div class="kv"><span>齿比</span><strong id="gearLearning">学习中</strong></div>
+          <div class="kv"><span>动力曲线</span><strong id="powerLearning">学习中</strong></div>
+        </div>
+
+        <div class="card stack">
+          <div class="label">驾驶风格</div>
+          <div class="kv"><span>运动指数</span><strong id="sportIndex">0.00</strong></div>
+          <div class="sport-track"><div id="sportMask" class="sport-mask"></div></div>
+          <div class="kv"><span>状态</span><strong id="sportRegime">巡航</strong></div>
+        </div>
+
+        <div class="card stack">
+          <div class="label">动力区间</div>
+          <div class="kv"><span>峰值扭矩</span><strong id="peakTorque">学习中</strong></div>
+          <div class="kv"><span>峰值功率</span><strong id="peakPowerBand">学习中</strong></div>
+          <div class="kv"><span>最高转速</span><strong id="peakRpmSmall">0</strong></div>
+          <div class="kv"><span>最大 G 值</span><strong id="peakGSmall">0.00</strong></div>
+        </div>
+      </section>
+
+      <section class="stack">
+        <div class="rpm-leds" id="leds"></div>
+        <div class="hero">
+          <div class="card">
+            <div class="label">挡位</div>
+            <div id="gear" class="gear">-</div>
+            <div class="label" id="drivetrainLabel">驱动形式</div>
+          </div>
+
+          <div class="card stack">
+            <div class="label">转速</div>
+            <div><span id="rpm" class="big-num rpm">0</span> <span class="label">RPM</span></div>
+            <div class="kv"><span>最大转速</span><strong id="rpmMax">8000</strong></div>
+            <div class="bar"><div id="rpmBar"></div></div>
+            <div class="metrics">
+              <div>
+                <div class="label">速度</div>
+                <div><span id="speed" class="big-num">0</span> <span class="label">KM/H</span></div>
+              </div>
+              <div>
+                <div class="label">功率</div>
+                <div><span id="power" class="big-num">0</span> <span class="label">KW</span></div>
+              </div>
+              <div>
+                <div class="label">扭矩</div>
+                <div><span id="torque" class="big-num">0</span> <span class="label">NM</span></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="label">踏板输入</div>
+            <div class="bar-row"><span>油门</span><div class="bar"><div id="throttleBar"></div></div><strong id="throttle">0</strong></div>
+            <div class="bar-row"><span>刹车</span><div class="bar"><div id="brakeBar"></div></div><strong id="brake">0</strong></div>
+            <div class="bar-row"><span>离合</span><div class="bar"><div id="clutchBar"></div></div><strong id="clutch">0</strong></div>
+          </div>
+        </div>
+
+        <div class="card state">
+          <div class="label">TCU 状态</div>
+          <div id="state" class="state-main">STANDBY</div>
+          <div id="subState" class="state-sub">等待遥测</div>
+          <div class="flags">
+            <span id="airborneFlag" class="flag">腾空</span>
+            <span id="yawFlag" class="flag">横摆锁定</span>
+            <span id="watchdogFlag" class="flag">WATCHDOG</span>
+          </div>
+        </div>
+
+        <div class="lower-grid">
+          <div class="card chart">
+            <div class="chart-head">
+              <div class="label">实时遥测曲线</div>
+              <div class="legend">
+                <span style="color: var(--green)">RPM <strong id="legendRpm">0%</strong></span>
+                <span style="color: #22d3ee">油门 <strong id="legendThr">0%</strong></span>
+                <span style="color: var(--red)">刹车 <strong id="legendBrk">0%</strong></span>
+                <span style="color: var(--blue)">速度 <strong id="legendSpd">0</strong></span>
+              </div>
+            </div>
+            <canvas id="chart" width="800" height="220"></canvas>
+          </div>
+
+          <div class="card">
+            <div class="label">车辆动态</div>
+            <div class="kv"><span>姿态</span><strong id="attitudeMain">中性</strong></div>
+            <div class="kv"><span>驾驶状态</span><strong id="styleMain">巡航</strong></div>
+            <div class="kv"><span>抓地使用</span><strong id="gripMain">0%</strong></div>
+            <div class="bar"><div id="gripBar"></div></div>
+          </div>
+
+          <div class="card">
+            <div class="label">G 值</div>
+            <div class="g-meter"><div id="gBall" class="g-ball"></div></div>
+            <div class="kv"><span>横向</span><strong id="gLatMain">0.00</strong></div>
+            <div class="kv"><span>纵向</span><strong id="gLonMain">0.00</strong></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="stack">
+        <div class="card stack">
+          <div class="label">遥测数据</div>
+          <div class="kv"><span>涡轮</span><strong id="turbo">0.00 bar</strong></div>
+          <div class="kv"><span>横向 G</span><strong id="gLat">0.00</strong></div>
+          <div class="kv"><span>纵向 G</span><strong id="gLon">0.00</strong></div>
+          <div class="kv"><span>抓地</span><strong id="grip">0%</strong></div>
+          <div class="kv"><span>姿态</span><strong id="attitude">中性</strong></div>
+        </div>
+
+        <div class="card stack">
+          <div class="label">统计</div>
+          <div class="stat-title">本次驾驶</div>
+          <div class="kv"><span>时长</span><strong id="statDuration">0分 00秒</strong></div>
+          <div class="kv"><span>总换挡</span><strong id="statTotal">0</strong></div>
+          <div class="kv"><span>升挡</span><strong id="statUp">0</strong></div>
+          <div class="kv"><span>降挡</span><strong id="statDown">0</strong></div>
+          <div class="kv"><span>强制降挡</span><strong id="statKickdown">0</strong></div>
+          <div class="kv"><span>刹车降挡</span><strong id="statBrakeDown">0</strong></div>
+          <div class="kv"><span>预测换挡</span><strong id="statPredictive">0</strong></div>
+          <div class="kv"><span>起步控制</span><strong id="statLaunches">0</strong></div>
+          <div class="stat-title">性能</div>
+          <div class="kv"><span>最高转速</span><strong id="statPeakRpm">0</strong></div>
+          <div class="kv"><span>最高速度</span><strong id="statPeakSpeed">0 km/h</strong></div>
+          <div class="kv"><span>最大横向 G</span><strong id="statPeakGLat">0.00</strong></div>
+          <div class="kv"><span>最大纵向 G</span><strong id="statPeakGLon">0.00</strong></div>
+          <div class="kv"><span>峰值功率</span><strong id="statPeakPower">0 kW</strong></div>
+          <div class="kv"><span>平均油门</span><strong id="statAvgThr">0%</strong></div>
+          <div class="kv"><span>车辆数</span><strong id="statCars">0</strong></div>
+        </div>
+
+        <div class="card stack">
+          <div class="label">换挡历史</div>
+          <div id="history" class="history"></div>
+        </div>
+
+        <div class="card">
+          <div class="label">连接日志</div>
+          <div id="log" class="log"></div>
+        </div>
+      </section>
+    </main>
+
+    <script>
+      (function () {
+        var modeNames = ["COMFORT", "DYNAMIC", "RACE", "DRIFT", "OFFROAD", "MANUAL"];
+        var state = {
+          connected: false,
+          live: false,
+          mode: "COMFORT",
+          shiftCount: 0,
+          packetsTotal: 0,
+          logStatus: null,
+          effectiveOutputMode: "-",
+          telemetry: null,
+          history: [],
+          samples: [],
+          reconnectTimer: null,
+          ws: null,
+        };
+
+        function byId(id) {
+          return document.getElementById(id);
+        }
+
+        function text(id, value) {
+          var el = byId(id);
+          if (el) el.textContent = value;
+        }
+
+        function pct(value) {
+          var n = Number(value) || 0;
+          return Math.max(0, Math.min(100, n));
+        }
+
+        function setBar(id, value, color) {
+          var el = byId(id);
+          if (!el) return;
+          el.style.width = pct(value) + "%";
+          if (color) el.style.background = color;
+        }
+
+        function round(value) {
+          return Math.round(Number(value) || 0);
+        }
+
+        function fixed(value, digits) {
+          return (Number(value) || 0).toFixed(digits);
+        }
+
+        function clamp(value, min, max) {
+          var n = Number(value) || 0;
+          return Math.max(min, Math.min(max, n));
+        }
+
+        function duration(seconds) {
+          var total = Math.max(0, Math.floor(Number(seconds) || 0));
+          var mins = Math.floor(total / 60);
+          var secs = String(total % 60);
+          if (secs.length < 2) secs = "0" + secs;
+          return mins + "分 " + secs + "秒";
+        }
+
+        function zhRegime(value) {
+          var map = {
+            CRUISE: "巡航",
+            SPORT: "运动",
+            ATTACK: "激进",
+            CALM: "平稳",
+            AGGRESSIVE: "激进",
+          };
+          var key = String(value || "CRUISE").toUpperCase();
+          return map[key] || key;
+        }
+
+        function zhAttitude(value) {
+          var map = {
+            NEUTRAL: "中性",
+            OVER: "转向过度",
+            UNDER: "转向不足",
+          };
+          var key = String(value || "NEUTRAL").toUpperCase();
+          return map[key] || key;
+        }
+
+        function gearLabel(value) {
+          if (value === 0) return "R";
+          if (value === 11) return "N";
+          return value || "-";
+        }
+
+        function wsUrl() {
+          var proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+          return proto + "//" + window.location.host + "/ws";
+        }
+
+        function log(line) {
+          var el = byId("log");
+          if (!el) return;
+          var time = new Date().toLocaleTimeString();
+          el.textContent = "[" + time + "] " + line + "\n" + el.textContent;
+        }
+
+        function safeJson(raw) {
+          try {
+            return JSON.parse(raw);
+          } catch (err) {
+            try {
+              return JSON.parse(
+                raw
+                  .replace(/\bNaN\b/g, "null")
+                  .replace(/\bInfinity\b/g, "null")
+                  .replace(/\b-Infinity\b/g, "null"),
+              );
+            } catch (err2) {
+              log("JSON 解析失败: " + err2.message);
+              return null;
+            }
+          }
+        }
+
+        function renderModes() {
+          var root = byId("modes");
+          if (!root) return;
+          root.innerHTML = "";
+          for (var i = 0; i < modeNames.length; i += 1) {
+            var name = modeNames[i];
+            var el = document.createElement("div");
+            el.className = "mode" + (name === state.mode ? " active" : "");
+            el.innerHTML = "<span>" + name + "</span><span>" + (name === state.mode ? "ACTIVE" : "READY") + "</span>";
+            root.appendChild(el);
+          }
+        }
+
+        function renderLeds(rpmPct) {
+          var root = byId("leds");
+          if (!root) return;
+          if (!root.children.length) {
+            for (var i = 0; i < 20; i += 1) {
+              var led = document.createElement("div");
+              led.className = "led";
+              root.appendChild(led);
+            }
+          }
+          var active = Math.round(pct(rpmPct * 100) / 5);
+          for (var j = 0; j < root.children.length; j += 1) {
+            var cls = "led";
+            if (j < active) {
+              cls += " on " + (j > 16 ? "blue" : j > 12 ? "red" : j > 7 ? "yellow" : "green");
+            }
+            root.children[j].className = cls;
+          }
+        }
+
+        function renderHistory(items) {
+          var root = byId("history");
+          if (!root) return;
+          root.innerHTML = "";
+          var list = (items || []).slice(-12).reverse();
+          if (!list.length) {
+            root.innerHTML = '<div class="label">暂无换挡记录</div>';
+            return;
+          }
+          for (var i = 0; i < list.length; i += 1) {
+            var item = list[i];
+            var el = document.createElement("div");
+            el.className = "history-item";
+            var action = item.action === "UP" ? "升挡" : "降挡";
+            var when = item.ts ? new Date(item.ts * 1000).toLocaleTimeString() : "";
+            el.innerHTML =
+              "<strong>" +
+              action +
+              "</strong><span>挡位 " +
+              (item.gear || "-") +
+              " - " +
+              (item.reason || item.rule || "") +
+              "</span><span>" +
+              when +
+              "</span>";
+            root.appendChild(el);
+          }
+        }
+
+        function pushSample(t) {
+          state.samples.push({
+            rpm: clamp(t.rpm_pct, 0, 1),
+            throttle: clamp(t.throttle, 0, 1),
+            brake: clamp(t.brake, 0, 1),
+            speed: clamp((Number(t.speed_kmh) || 0) / 400, 0, 1),
+          });
+          if (state.samples.length > 300) state.samples.shift();
+        }
+
+        function drawChart() {
+          var canvas = byId("chart");
+          if (!canvas || !canvas.getContext) return;
+          var rect = canvas.getBoundingClientRect();
+          var width = Math.max(320, Math.floor(rect.width || canvas.clientWidth || 800));
+          var height = Math.max(160, Math.floor(rect.height || canvas.clientHeight || 220));
+          if (canvas.width !== width) canvas.width = width;
+          if (canvas.height !== height) canvas.height = height;
+
+          var ctx = canvas.getContext("2d");
+          ctx.clearRect(0, 0, width, height);
+          ctx.strokeStyle = "rgba(255,255,255,0.07)";
+          ctx.lineWidth = 1;
+          for (var i = 0; i <= 4; i += 1) {
+            var y = (height / 4) * i;
+            ctx.beginPath();
+            ctx.moveTo(0, y);
+            ctx.lineTo(width, y);
+            ctx.stroke();
+          }
+
+          function line(key, color) {
+            if (state.samples.length < 2) return;
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 1.6;
+            ctx.beginPath();
+            for (var j = 0; j < state.samples.length; j += 1) {
+              var x = (j / 299) * width;
+              var yy = height - state.samples[j][key] * height;
+              if (j === 0) ctx.moveTo(x, yy);
+              else ctx.lineTo(x, yy);
+            }
+            ctx.stroke();
+          }
+
+          line("rpm", "#22c55e");
+          line("throttle", "#22d3ee");
+          line("brake", "#ef4444");
+          line("speed", "#3b82f6");
+        }
+
+        function renderLearning(t) {
+          var calibrated = !!t.calibrated;
+          var pill = byId("calibrationPill");
+          if (pill) {
+            pill.className = "pill " + (calibrated ? "green" : "yellow");
+            pill.textContent = calibrated ? "已校准" : "学习中";
+          }
+          text("gearLearning", calibrated ? "已学习" : "学习中");
+          text("powerLearning", t.power_curve_learned ? "已学习" : "学习中");
+
+          var sport = clamp(t.drive_style_index, 0, 1);
+          text("sportIndex", fixed(sport, 2));
+          var sportMask = byId("sportMask");
+          if (sportMask) sportMask.style.width = (100 - sport * 100) + "%";
+          text("sportRegime", zhRegime(t.drive_style_regime));
+          text("styleMain", zhRegime(t.drive_style_regime));
+
+          var tq = t.peak_torque_rpm_pct;
+          var hp = t.peak_power_rpm_pct;
+          text("peakTorque", tq == null ? "学习中" : Math.round(Number(tq) * 100) + "% RPM");
+          text("peakPowerBand", hp == null ? "学习中" : Math.round(Number(hp) * 100) + "% RPM");
+          text("peakRpmSmall", round(t.peak_rpm));
+          text("peakGSmall", fixed(t.peak_g, 2));
+        }
+
+        function renderStats(t) {
+          var s = t.session_stats || {};
+          var total = (Number(s.upshifts) || 0) + (Number(s.downshifts) || 0);
+          text("statDuration", duration(s.duration_s));
+          text("statTotal", total);
+          text("statUp", round(s.upshifts));
+          text("statDown", round(s.downshifts));
+          text("statKickdown", round(s.kickdowns));
+          text("statBrakeDown", round(s.brake_downs));
+          text("statPredictive", round(s.predictives));
+          text("statLaunches", round(s.launches));
+          text("statPeakRpm", round(s.peak_rpm));
+          text("statPeakSpeed", round(s.peak_speed) + " km/h");
+          text("statPeakGLat", fixed(s.peak_g_lat, 2));
+          text("statPeakGLon", fixed(s.peak_g_lon, 2));
+          text("statPeakPower", round(s.peak_power_kw) + " kW");
+          text("statAvgThr", round(s.avg_throttle) + "%");
+          text("statCars", round(s.cars_driven));
+        }
+
+        function renderDynamics(t) {
+          var grip = clamp((Number(t.grip_usage) || 0) * 100, 0, 100);
+          text("grip", round(grip) + "%");
+          text("gripMain", round(grip) + "%");
+          setBar("gripBar", grip, grip > 90 ? "var(--red)" : grip > 75 ? "var(--yellow)" : "var(--green)");
+          text("attitude", zhAttitude(t.attitude));
+          text("attitudeMain", zhAttitude(t.attitude));
+
+          var gLat = Number(t.g_lat) || 0;
+          var gLon = Number(t.g_lon) || 0;
+          text("gLat", fixed(gLat, 2));
+          text("gLon", fixed(gLon, 2));
+          text("gLatMain", fixed(gLat, 2));
+          text("gLonMain", fixed(gLon, 2));
+          var maxG = 1.5;
+          var x = 50 + (clamp(gLat, -maxG, maxG) / maxG) * 50;
+          var y = 50 - (clamp(gLon, -maxG, maxG) / maxG) * 50;
+          var gBall = byId("gBall");
+          if (gBall) {
+            gBall.style.left = x + "%";
+            gBall.style.top = y + "%";
+          }
+
+          var airborneFlag = byId("airborneFlag");
+          var yawFlag = byId("yawFlag");
+          var watchdogFlag = byId("watchdogFlag");
+          if (airborneFlag) airborneFlag.className = "flag" + (t.airborne ? " on" : "");
+          if (yawFlag) yawFlag.className = "flag" + (t.yaw_transient ? " on" : "");
+          if (watchdogFlag) watchdogFlag.className = "flag" + (t.watchdog_stuck ? " on" : "");
+        }
+
+        function render() {
+          var dot = byId("dot");
+          if (dot) dot.className = "dot" + (state.connected && state.live ? " live" : "");
+          text("connection", state.connected ? (state.live ? "实时" : "待机") : "未连接");
+          text("shiftCount", state.shiftCount);
+          text("packetsTotal", state.packetsTotal);
+          text("outputMode", state.effectiveOutputMode || "-");
+          text("logStatus", state.logStatus && state.logStatus.recording ? "记录中" : "已停止");
+          renderModes();
+
+          var t = state.telemetry || {};
+          text("gear", gearLabel(t.gear));
+          text("speed", round(t.speed_kmh));
+          text("rpm", round(t.rpm));
+          text("rpmMax", round(t.rpm_max || 8000));
+          text("drivetrainLabel", t.drivetrain || "驱动形式");
+          text("power", round(t.power_kw));
+          text("torque", round(t.torque_nm));
+          setBar("rpmBar", (Number(t.rpm_pct) || 0) * 100, (Number(t.rpm_pct) || 0) > 0.9 ? "var(--red)" : "var(--green)");
+          renderLeds(Number(t.rpm_pct) || 0);
+          text("legendRpm", round((Number(t.rpm_pct) || 0) * 100) + "%");
+
+          var throttle = (Number(t.throttle) || 0) * 100;
+          var brake = (Number(t.brake) || 0) * 100;
+          var clutch = t.clutch_raw ? (Number(t.clutch_raw) / 255) * 100 : 0;
+          text("throttle", round(throttle));
+          text("brake", round(brake));
+          text("clutch", round(clutch));
+          setBar("throttleBar", throttle, "var(--green)");
+          setBar("brakeBar", brake, "var(--red)");
+          setBar("clutchBar", clutch, "var(--blue)");
+          text("legendThr", round(throttle) + "%");
+          text("legendBrk", round(brake) + "%");
+          text("legendSpd", round(t.speed_kmh));
+
+          text("state", t.tcu_state || "STANDBY");
+          text("subState", t.tcu_state_sub || "等待遥测");
+          text("turbo", fixed(t.turbo_bar, 2) + " bar");
+          renderLearning(t);
+          renderStats(t);
+          renderDynamics(t);
+          drawChart();
+          renderHistory(state.history);
+        }
+
+        function handleMessage(msg) {
+          if (!msg || !msg.type) return;
+          if (msg.type === "init") {
+            state.connected = true;
+            state.live = !!msg.data.live;
+            state.mode = msg.data.mode || state.mode;
+            state.shiftCount = msg.data.shift_count || 0;
+            state.packetsTotal = msg.data.packets_total || 0;
+            state.logStatus = msg.data.log_status || null;
+            state.effectiveOutputMode = msg.data.effective_output_mode || "-";
+            log("已连接后端");
+          } else if (msg.type === "telemetry") {
+            state.telemetry = msg.data || {};
+            pushSample(state.telemetry);
+            if (msg.data && msg.data.shift_history) state.history = msg.data.shift_history;
+            if (msg.data && msg.data.log_status) state.logStatus = msg.data.log_status;
+          } else if (msg.type === "state") {
+            if (msg.data.mode) state.mode = msg.data.mode;
+            if (msg.data.live !== undefined) state.live = !!msg.data.live;
+            if (msg.data.shift_count !== undefined) state.shiftCount = msg.data.shift_count;
+            if (msg.data.packets_total !== undefined) state.packetsTotal = msg.data.packets_total;
+          } else if (msg.type === "log_status") {
+            state.logStatus = msg.data;
+          }
+          render();
+        }
+
+        function scheduleReconnect() {
+          if (state.reconnectTimer) window.clearTimeout(state.reconnectTimer);
+          state.reconnectTimer = window.setTimeout(connect, 1500);
+        }
+
+        function connect() {
+          var url = wsUrl();
+          try {
+            if (state.ws) state.ws.close();
+            state.ws = new WebSocket(url);
+          } catch (err) {
+            log("WebSocket 失败: " + err.message);
+            state.connected = false;
+            state.live = false;
+            render();
+            scheduleReconnect();
+            return;
+          }
+
+          log("正在连接 " + url);
+          state.ws.onopen = function () {
+            state.connected = true;
+            render();
+          };
+          state.ws.onmessage = function (event) {
+            handleMessage(safeJson(String(event.data)));
+          };
+          state.ws.onerror = function () {
+            log("WebSocket 错误");
+          };
+          state.ws.onclose = function () {
+            state.connected = false;
+            state.live = false;
+            render();
+            scheduleReconnect();
+          };
+        }
+
+        window.addEventListener("error", function (event) {
+          log("Page error: " + event.message);
+        });
+
+        render();
+        connect();
+      })();
+    </script>
   </body>
 </html>

@@ -35,6 +35,8 @@ An external adaptive transmission controller for *Forza Horizon 6*. It reads rea
 
 **v13** ships as a Windows tray app (Electron) with a floating HUD and auto-update. The live telemetry dashboard runs in your browser at **http://127.0.0.1:8765** (English / 简体中文). A portable Python-only build is still available for users who prefer no Electron.
 
+> **LAN Chinese Dashboard fork:** this fork keeps the original TCU backend, Electron Settings window, HUD, installer, portable zip, and backend-only zip workflows, but replaces the browser dashboard served at `:8765` with a compact Chinese read-only telemetry panel for phones, tablets, and other LAN devices. Set **Web bind address** to `0.0.0.0`, then open `http://<your-PC-LAN-IP>:8765` from the remote device.
+
 | | |
 | :-- | :-- |
 | 🚗 **5 drive modes** | Comfort · Dynamic · Race · Drift · Off-road |
@@ -59,7 +61,7 @@ flowchart LR
 | Play — tray app, HUD overlay & auto-update | [Download Electron installer](#download--use-electron-installer) |
 | Play — Python backend only, no Electron | [Download backend-only zip](#download--use-backend-only-zip) |
 | Develop or run from this repo | [Run from source](#run-from-source) |
-| Change the Vue UI | [apps/dashboard/README.md](apps/dashboard/README.md) |
+| Change the LAN dashboard | [apps/dashboard/README.md](apps/dashboard/README.md) |
 
 **Platform:** Windows 10 / 11 only. Run as **Administrator** (required for global key injection).
 
@@ -373,6 +375,8 @@ Closing the Settings window hides it; the app keeps running in the tray until yo
 
 ## Web Dashboard
 
+This fork's browser dashboard is a Chinese, read-only LAN telemetry panel. It is served directly by the backend at **http://127.0.0.1:8765** and, when the web bind address is `0.0.0.0`, at **http://<your-PC-LAN-IP>:8765** for other devices on the same network.
+
 When connected, the browser dashboard shows:
 
 - **Gear / speed / RPM** — large gear readout, 20-segment RPM LED bar
@@ -384,9 +388,7 @@ When connected, the browser dashboard shows:
 - **Stats & shift history** — session counters, peaks, and recent shift log (right panel)
 - **Learning sidebar** — sport index, power-curve / ratio calibration status
 
-In the **Electron** build the browser page is **view-only** (footer reminds you to use the desktop Settings app for configuration and logging). The **backend-only** build exposes full settings in the Web UI.
-
-Switch UI language in the page header (English / 简体中文).
+The dashboard is intentionally **view-only** in this fork. Use the desktop **Settings** window for drive modes, tuning, network settings, output mode, and logging controls.
 
 ---
 
