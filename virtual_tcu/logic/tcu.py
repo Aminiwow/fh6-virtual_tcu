@@ -29,7 +29,7 @@ from virtual_tcu.telemetry.model import Telemetry
 
 
 class TCULogic:
-    PROFILE_SCHEMA = "fh6-dataout-2026-05-15-v4-redline-guard"
+    PROFILE_SCHEMA = "fh6-dataout-2026-05-15-v5-race-redline"
 
     def __init__(
         self,
@@ -50,7 +50,7 @@ class TCULogic:
         self._discord_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="TCU_Discord")
 
         try:
-            self._mode = Mode(config.get("current_mode", "COMFORT"))
+            self._mode = Mode(str(config.get("current_mode", "COMFORT")).upper())
         except (ValueError, KeyError):
             self._mode = Mode.COMFORT
 
@@ -173,8 +173,8 @@ class TCULogic:
 
     def _setup_paddle_listeners(self):
         kb = self._kb
-        down_key = kb.key_up
-        up_key = kb.key_down
+        down_key = kb.key_down
+        up_key = kb.key_up
 
         if not down_key or not up_key:
             return
@@ -233,7 +233,7 @@ class TCULogic:
 
     def set_mode(self, mode_name: str):
         try:
-            new_mode = Mode(mode_name)
+            new_mode = Mode(str(mode_name).upper())
             with self._mode_lock:
                 if new_mode == Mode.MANUAL and self._mode != Mode.MANUAL:
                     self._last_auto_mode = self._mode
@@ -380,10 +380,12 @@ class TCULogic:
         if td.gear != self._prev_gear and td.gear > 0 and self._prev_gear > 0:
             if not self._we_shifted:
                 airborne = self._config.get("feat_airtime_lock") and self._airtime.is_airborne
+                external_downshift = td.gear < self._prev_gear
                 if td.brake < 0.30 and not airborne:
                     self._no_downshift_until = max(self._no_downshift_until, now + 0.8)
                 if not airborne:
-                    self._no_upshift_until = max(self._no_upshift_until, now + 0.5)
+                    hold_s = 2.5 if external_downshift and self.mode == Mode.RACE else 1.5 if external_downshift else 0.5
+                    self._no_upshift_until = max(self._no_upshift_until, now + hold_s)
         self._prev_gear = td.gear
         self._we_shifted = False
 
@@ -692,10 +694,13 @@ class TCULogic:
     def _wheelspin_upshift_now(self, td: Telemetry) -> bool:
         if not self._config.get("feat_drivetrain_aware"):
             return False
-        if td.gear < 1 or td.gear > 3:
+        if self.mode == Mode.RACE:
             self._slip_streak = 0
             return False
-        if self.mode == Mode.RACE and td.rpm_pct < 0.90:
+        if time.time() < self._no_upshift_until:
+            self._slip_streak = 0
+            return False
+        if td.gear < 1 or td.gear > 3:
             self._slip_streak = 0
             return False
         if td.throttle < 0.40:
@@ -709,7 +714,7 @@ class TCULogic:
         else:  # AWD or unknown
             slip = max(abs(td.slip_fl), abs(td.slip_fr), abs(td.slip_rl), abs(td.slip_rr))
 
-        threshold = 1.8 if self.mode == Mode.RACE else 1.2
+        threshold = 1.2
         if slip > threshold:
             self._slip_streak += 1
             return self._slip_streak >= 3
@@ -790,11 +795,15 @@ class TCULogic:
         if td.speed_kmh <= Cfg.MIN_SPEED_KMH:
             return False
 
+        if self.mode == Mode.RACE:
+            target_pct = self._race_redline_target_pct()
+            if td.rpm_pct < target_pct:
+                return False
+            return self._shift_up(td, 300, "UPSHIFT", "race redline")
+
         performance_target = self._performance_upshift_target_pct(td, offset)
         if performance_target is not None:
             target_pct, source = performance_target
-            if self.mode == Mode.RACE:
-                target_pct = max(target_pct, self._config.get("race_up_wot", 94) / 100)
             target_pct = min(target_pct, self._upshift_ceiling_pct(td))
             if td.rpm_pct < target_pct:
                 return False
@@ -808,12 +817,14 @@ class TCULogic:
             offset=offset,
             blend_fallback=not mature_curve,
         )
-        if self.mode == Mode.RACE:
-            target_pct = max(target_pct, fallback)
         target_pct = min(target_pct, self._upshift_ceiling_pct(td))
         if td.rpm_pct < target_pct:
             return False
         return self._shift_up(td, 300, "UPSHIFT", "in band")
+
+    def _race_redline_target_pct(self) -> float:
+        configured = self._config.get("race_up_wot", 98) / 100
+        return max(0.98, min(0.995, configured))
 
     def _performance_upshift_target_pct(self, td: Telemetry, offset: float) -> tuple[float, str] | None:
         if not self._config.get("feat_power_curve"):
@@ -981,14 +992,7 @@ class TCULogic:
         base_mode = self._last_auto_mode
 
         if base_mode == Mode.RACE:
-            mature_curve = self._power_curve.has_mature_data(td.car_key)
-            up_pct = self._power_curve.optimal_upshift_rpm(
-                td,
-                fallback=self._config.get("race_up_wot", 94) / 100,
-                offset=0.03,
-                blend_fallback=not mature_curve,
-            )
-            up_pct = min(up_pct, self._upshift_ceiling_pct(td))
+            up_pct = self._race_redline_target_pct()
         elif base_mode == Mode.DYNAMIC:
             up_pct = self._power_curve.optimal_upshift_rpm(
                 td, fallback=self._config.get("dynamic_up_wot", 82) / 100, offset=0.05

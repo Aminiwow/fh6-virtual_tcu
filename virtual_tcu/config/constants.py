@@ -29,7 +29,7 @@ DEFAULTS = {
     "dynamic_up_wot": 82,
     "race_up_idle": 70,
     "race_up_mid": 80,
-    "race_up_wot": 94,
+    "race_up_wot": 98,
     "drift_up": 92,
     "drift_down": 65,
     "offroad_up_idle": 35,

@@ -6,6 +6,9 @@ from virtual_tcu.config.constants import DEFAULTS
 from virtual_tcu.config.web_bind import valid_bind_host
 
 
+VALID_MODES = {"COMFORT", "DYNAMIC", "RACE", "DRIFT", "OFFROAD", "MANUAL"}
+
+
 class ConfigStore:
     def __init__(self, path: str | Path | None = None):
         self.path = Path(path) if path is not None else paths.config_file()
@@ -18,14 +21,20 @@ class ConfigStore:
             return
         try:
             stored = json.loads(self.path.read_text())
-            new_keys_added = False
+            config_changed = False
             for k, default_v in DEFAULTS.items():
                 if k not in stored:
-                    new_keys_added = True
+                    config_changed = True
                     continue
                 v = stored[k]
                 try:
-                    if isinstance(default_v, str):
+                    if k == "current_mode":
+                        v = str(v).strip().upper()
+                        if v not in VALID_MODES:
+                            v = DEFAULTS["current_mode"]
+                        if v != stored[k]:
+                            config_changed = True
+                    elif isinstance(default_v, str):
                         v = str(v)
                     elif isinstance(default_v, bool):
                         if isinstance(v, str):
@@ -34,6 +43,9 @@ class ConfigStore:
                             v = bool(v)
                     elif isinstance(default_v, int):
                         v = int(float(v))
+                        if k == "race_up_wot" and v < 98:
+                            v = 98
+                            config_changed = True
                     elif isinstance(default_v, float):
                         v = float(v)
                     self.data[k] = v
@@ -43,18 +55,18 @@ class ConfigStore:
             if not valid_bind_host(host):
                 print(f"[Config] invalid web_host {host!r}, using default")
                 self.data["web_host"] = DEFAULTS["web_host"]
-                new_keys_added = True
+                config_changed = True
             port = int(self.data.get("web_port", DEFAULTS["web_port"]))
             if port < 1024 or port > 65535:
                 print(f"[Config] invalid web_port {port}, using default")
                 self.data["web_port"] = DEFAULTS["web_port"]
-                new_keys_added = True
+                config_changed = True
             udp_port = int(self.data.get("udp_port", DEFAULTS["udp_port"]))
             if udp_port < 1 or udp_port > 65535:
                 print(f"[Config] invalid udp_port {udp_port}, using default")
                 self.data["udp_port"] = DEFAULTS["udp_port"]
-                new_keys_added = True
-            if new_keys_added:
+                config_changed = True
+            if config_changed:
                 self.save()
                 print("[Config] new settings added — file updated")
         except Exception as e:
@@ -107,6 +119,10 @@ class ConfigStore:
             default_v = DEFAULTS[key]
             if key in ("web_host", "web_port", "udp_port"):
                 return
+            elif key == "current_mode":
+                value = str(value).strip().upper()
+                if value not in VALID_MODES:
+                    value = DEFAULTS["current_mode"]
             elif isinstance(default_v, str):
                 value = str(value).strip().lower()
                 if not value and key.startswith("shift_key_"):
@@ -128,6 +144,8 @@ class ConfigStore:
                     value = max(0, min(100, value))
                 else:
                     value = max(1000, min(10000, value))
+                if key == "race_up_wot":
+                    value = max(98, min(99, value))
             elif isinstance(default_v, float):
                 value = float(value)
             self.data[key] = value
