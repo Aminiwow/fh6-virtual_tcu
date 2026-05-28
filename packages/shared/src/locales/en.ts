@@ -83,7 +83,8 @@ export default {
     peakPower: 'Peak power',
     learning: 'learning…',
     rpmSuffix: '% RPM',
-    hint: 'Learned per car at >70% throttle. Race upshifts ~3% past peak power.',
+    hint:
+      'Learned per car at >70% throttle. Race uses peak power +3%, capped by learned fuel-cut or a conservative RPM guard.',
   },
   logger: {
     title: 'Replay Logger',
@@ -151,6 +152,7 @@ export default {
     extras: 'Extras',
   },
   settings: {
+    title: 'Shift Parameters',
     features: 'Features',
     launchControl: 'Launch Control',
     comfort: 'Comfort',
@@ -161,7 +163,8 @@ export default {
     reset: 'Reset to defaults',
     resetConfirm: 'Reset all settings to defaults?',
     autosave: 'Auto-saved to tcu_config.json',
-    raceFallbackHint: 'Used until power curve is learned. Then peak_power + 3% takes over.',
+    raceFallbackHint:
+      'Race mode uses this as the fallback cap while learning; mature power curves shift by peak power with learned fuel-cut or conservative RPM protection.',
     watchdog: 'Engine appears stuck — telemetry not processing',
     corneringLock: 'Cornering Lock',
     launchControlFeat: 'Launch Control',
@@ -180,7 +183,7 @@ export default {
     launchRpm: 'Target RPM',
     comfortUpWot: 'Upshift WOT',
     dynamicUpWot: 'Upshift WOT',
-    raceUpWot: 'Upshift WOT',
+    raceUpWot: 'Race upshift cap',
     offroadUpWot: 'Upshift WOT (hold gear)',
     offroadDownRpm: 'Torque downshift RPM',
     brakeThr: 'Brake threshold',

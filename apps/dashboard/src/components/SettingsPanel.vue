@@ -251,7 +251,11 @@
                 <NFlex justify="space-between" align="center">
                   <NText depth="3">{{ $t('stats.powerCurve') }}</NText>
                   <NText code>{{
-                    statsRows.powerLearned ? $t('stats.learned') : $t('stats.learningStatus')
+                    statsRows.powerLearned
+                      ? $t('stats.learned')
+                      : statsRows.powerAvailable
+                        ? `${$t('stats.learningStatus')} ${statsRows.powerConfidence}%`
+                        : $t('stats.learningStatus')
                   }}</NText>
                 </NFlex>
               </NFlex>

@@ -94,7 +94,9 @@ export function useSettingsApp() {
       avgThr: Math.round(s.avg_throttle),
       cars: s.cars_driven,
       calib: tel?.calibrated,
+      powerAvailable: tel?.power_curve_available,
       powerLearned: tel?.power_curve_learned,
+      powerConfidence: Math.round((tel?.power_curve_confidence ?? 0) * 100),
     }
   })
 

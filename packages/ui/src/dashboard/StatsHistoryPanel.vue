@@ -123,7 +123,11 @@ const { statsRows, historyItems } = useStatsHistoryPanel(
         <div :class="statRow">
           <span class="text-tcu-txt-dim">{{ $t('stats.powerCurve') }}</span>
           <span class="text-tcu-txt font-mono font-semibold">{{
-            statsRows.powerLearned ? $t('stats.learned') : $t('stats.learningStatus')
+            statsRows.powerLearned
+              ? $t('stats.learned')
+              : statsRows.powerAvailable
+                ? `${$t('stats.learningStatus')} ${statsRows.powerConfidence}%`
+                : $t('stats.learningStatus')
           }}</span>
         </div>
       </template>

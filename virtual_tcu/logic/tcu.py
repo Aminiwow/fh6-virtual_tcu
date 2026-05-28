@@ -29,6 +29,8 @@ from virtual_tcu.telemetry.model import Telemetry
 
 
 class TCULogic:
+    PROFILE_SCHEMA = "fh6-dataout-2026-05-15-v1"
+
     def __init__(
         self,
         kb: OutputInterface,
@@ -75,6 +77,7 @@ class TCULogic:
         self._last_packet_time = 0.0
         self._prev_gear = -1
         self._we_shifted = False
+        self._slip_streak = 0
 
         self._reverse_lock_until = 0.0
         self._current_car_key: tuple | None = None
@@ -121,6 +124,9 @@ class TCULogic:
         if gr is not None:
             profile["gear_ratios"] = gr["ratios"]
             profile["gear_counts"] = gr["counts"]
+            profile["gear_ratio_basis"] = gr["basis"]
+            profile["wheel_radius"] = gr["wheel_radius"]
+            profile["wheel_radius_count"] = gr["wheel_radius_count"]
         pc = self._power_curve.dump(ck)
         if pc is not None:
             profile["power_curve"] = pc
@@ -130,6 +136,7 @@ class TCULogic:
         if profile:
             from datetime import datetime
 
+            profile["telemetry_schema"] = self.PROFILE_SCHEMA
             profile["updated_at"] = datetime.now(UTC).isoformat()
             self._profiles.set(ck, profile)
 
@@ -138,10 +145,18 @@ class TCULogic:
         data = self._profiles.get(ck)
         if data is None:
             return
+        if data.get("telemetry_schema") != self.PROFILE_SCHEMA:
+            return
         if "gear_ratios" in data:
             self._calibrator.load(
                 ck,
-                {"ratios": data["gear_ratios"], "counts": data.get("gear_counts", {})},
+                {
+                    "ratios": data["gear_ratios"],
+                    "counts": data.get("gear_counts", {}),
+                    "basis": data.get("gear_ratio_basis"),
+                    "wheel_radius": data.get("wheel_radius"),
+                    "wheel_radius_count": data.get("wheel_radius_count", 0),
+                },
             )
         if "power_curve" in data:
             self._power_curve.load(ck, data["power_curve"])
@@ -279,6 +294,8 @@ class TCULogic:
                     "yaw_transient": False,
                     "peak_power_rpm_pct": None,
                     "peak_torque_rpm_pct": None,
+                    "power_curve_available": False,
+                    "power_curve_confidence": 0.0,
                 }
             return {
                 "gear": td.gear,
@@ -303,7 +320,9 @@ class TCULogic:
                 "peak_rpm": self._peak_rpm,
                 "peak_g": self._peak_g,
                 "calibrated": self._calibrator.has_data(td.car_key),
-                "power_curve_learned": self._power_curve.has_data(td.car_key),
+                "power_curve_available": self._power_curve.has_data(td.car_key),
+                "power_curve_learned": self._power_curve.has_mature_data(td.car_key),
+                "power_curve_confidence": self._power_curve.confidence(td.car_key),
                 "log_status": self._logger.status,
                 "shift_history": self._shift_history.snapshot(),
                 "session_stats": self._session_stats.snapshot(),
@@ -451,6 +470,8 @@ class TCULogic:
             # different build don't poison shift decisions.
             self._calibrator._ratios.pop(ck, None)
             self._calibrator._counts.pop(ck, None)
+            self._calibrator._wheel_radius.pop(ck, None)
+            self._calibrator._wheel_radius_counts.pop(ck, None)
             self._power_curve._fits.pop(ck, None)
             self._rev_limiter._redline.pop(ck, None)
             self._rev_limiter._rpm_window.pop(ck, None)
@@ -520,6 +541,10 @@ class TCULogic:
 
     def _shift_up(self, td: Telemetry, lock_ms: int, state: str, sub: str = "") -> bool:
         if td.gear >= 10:
+            return False
+        if self._config.get("feat_airtime_lock") and self._airtime.is_airborne:
+            self._tcu_state = "AIRBORNE"
+            self._tcu_state_sub = "upshift locked"
             return False
         if self._cornering_locked:
             return False
@@ -675,11 +700,11 @@ class TCULogic:
             return False
 
         if td.drivetrain == 0:  # FWD
-            slip = max(td.slip_fl, td.slip_fr)
+            slip = max(abs(td.slip_fl), abs(td.slip_fr))
         elif td.drivetrain == 1:  # RWD
-            slip = max(td.slip_rl, td.slip_rr)
+            slip = max(abs(td.slip_rl), abs(td.slip_rr))
         else:  # AWD or unknown
-            slip = max(td.slip_fl, td.slip_fr, td.slip_rl, td.slip_rr)
+            slip = max(abs(td.slip_fl), abs(td.slip_fr), abs(td.slip_rl), abs(td.slip_rr))
 
         if slip > 1.2:
             self._slip_streak += 1
@@ -762,10 +787,26 @@ class TCULogic:
             return False
 
         fallback = self._config.get("race_up_wot", 94) / 100
-        target_pct = self._power_curve.optimal_upshift_rpm(td, fallback=fallback, offset=offset)
+        mature_curve = self._power_curve.has_mature_data(td.car_key)
+        target_pct = self._power_curve.optimal_upshift_rpm(
+            td,
+            fallback=fallback,
+            offset=offset,
+            blend_fallback=not mature_curve,
+        )
+        target_pct = min(target_pct, self._upshift_ceiling_pct(td))
         if td.rpm_pct < target_pct:
             return False
         return self._shift_up(td, 300, "UPSHIFT", "in band")
+
+    def _upshift_ceiling_pct(self, td: Telemetry) -> float:
+        if self._rev_limiter.effective_redline(td) is not None:
+            return 0.985
+        # FH6 can report a nominal max RPM above the practical fuel-cut point.
+        # Until the real limiter is learned, keep a conservative cap so a
+        # mature high-RPM power curve cannot command the same 94% fuel-cut hit
+        # that the legacy WOT slider could cause.
+        return 0.920
 
     def _should_engine_brake(self, td: Telemetry) -> bool:
         if not self._config.get("feat_engine_brake"):
@@ -792,12 +833,10 @@ class TCULogic:
         return (new_speed - old_speed) < -0.5
 
     def _min_sensible_speed_for_gear(self, td: Telemetry) -> float:
-        ratios = self._calibrator.get_ratios(td.car_key)
-        if td.gear in ratios:
-            ratio_rpm_per_kmh = ratios[td.gear]
-            if ratio_rpm_per_kmh > 0:
-                target_rpm = td.engine_max_rpm * 0.25
-                return target_rpm / ratio_rpm_per_kmh
+        target_rpm = td.engine_max_rpm * 0.25
+        learned_speed = self._calibrator.speed_for_rpm(td.car_key, td.gear, target_rpm)
+        if learned_speed is not None:
+            return learned_speed
         if td.gear <= 1:
             return 0.0
         return max(0.0, (td.gear - 2) * 20 + 15)
@@ -855,9 +894,14 @@ class TCULogic:
         base_mode = self._last_auto_mode
 
         if base_mode == Mode.RACE:
+            mature_curve = self._power_curve.has_mature_data(td.car_key)
             up_pct = self._power_curve.optimal_upshift_rpm(
-                td, fallback=self._config.get("race_up_wot", 94) / 100, offset=0.03
+                td,
+                fallback=self._config.get("race_up_wot", 94) / 100,
+                offset=0.03,
+                blend_fallback=not mature_curve,
             )
+            up_pct = min(up_pct, self._upshift_ceiling_pct(td))
         elif base_mode == Mode.DYNAMIC:
             up_pct = self._power_curve.optimal_upshift_rpm(
                 td, fallback=self._config.get("dynamic_up_wot", 82) / 100, offset=0.05
@@ -936,10 +980,12 @@ class TCULogic:
 
         best_gear = td.gear
         best_diff = float("inf")
-        for gear, ratio in car_ratios.items():
+        for gear in car_ratios:
             if gear < 1 or gear > 10:
                 continue
-            rpm_at_gear = ratio * speed
+            rpm_at_gear = self._calibrator.project_rpm_at_speed(td.car_key, gear, speed)
+            if rpm_at_gear is None:
+                continue
             if rpm_at_gear > td.engine_max_rpm * 0.95:
                 continue
             diff = abs(rpm_at_gear - target_rpm)

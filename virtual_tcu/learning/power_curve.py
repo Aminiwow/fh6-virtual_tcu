@@ -101,6 +101,7 @@ class PowerCurveDetector:
     FULL_CONF_SAMPLES = 80
     MIN_SPREAD = 0.06
     GOOD_SPREAD = 0.16
+    TRUST_MODEL_CONFIDENCE = 0.35
 
     def __init__(self):
         self._fits: dict[tuple, _ParabolaFit] = {}
@@ -111,6 +112,8 @@ class PowerCurveDetector:
             return
         if td.throttle < 0.45 or td.torque_nm <= 0 or td.is_shifting:
             return
+        if td.min_suspension_norm <= 0.08 or td.any_puddle or td.max_surface_rumble > 0.20:
+            return
         r = td.rpm_pct
         if r < 0.20 or r > 1.0:
             return
@@ -119,7 +122,7 @@ class PowerCurveDetector:
         weight = 1.0
         if td.throttle < 0.70:
             weight *= 0.5
-        if td.rear_slip > 0.5:
+        if td.max_combined_slip > 0.5:
             weight *= 0.4
         self._fits.setdefault(ck, _ParabolaFit()).add(r, td.torque_nm, weight)
 
@@ -174,18 +177,27 @@ class PowerCurveDetector:
         return self._peaks(car_key)[2]
 
     def optimal_upshift_rpm(
-        self, td: Telemetry, fallback: float = 0.85, offset: float = 0.03
+        self,
+        td: Telemetry,
+        fallback: float = 0.85,
+        offset: float = 0.03,
+        blend_fallback: bool = True,
     ) -> float:
         pt, pp, conf = self._peaks(td.car_key)
         if pp is None:
             return fallback
         model = max(0.65, min(0.97, pp + offset))
+        if not blend_fallback or conf >= self.TRUST_MODEL_CONFIDENCE:
+            return model
         # Blend: early low-confidence estimates lean on the fallback,
         # mature ones trust the model fully.
         return conf * model + (1.0 - conf) * fallback
 
     def has_data(self, car_key: tuple) -> bool:
         return self._peaks(car_key)[1] is not None
+
+    def has_mature_data(self, car_key: tuple) -> bool:
+        return self.confidence(car_key) >= self.TRUST_MODEL_CONFIDENCE
 
     def dump(self, car_key: tuple) -> dict | None:
         """Serialise the parabola fit for *car_key*, or None if no data."""

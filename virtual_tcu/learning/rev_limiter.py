@@ -40,8 +40,9 @@ class RevLimiterDetector:
             or td.engine_max_rpm <= 0
             or td.throttle < self.MIN_THROTTLE
             or now - last_downshift_time < self.POST_SHIFT_IGNORE_S
-            or td.rear_slip > 0.8
-            or td.front_slip > 0.8
+            or td.max_combined_slip > 0.8
+            or not td.is_grounded
+            or td.any_puddle
         ):
             # Wheelspin makes RPM oscillate at WOT without being the
             # limiter — exclude it, same as the gear-ratio calibrator.

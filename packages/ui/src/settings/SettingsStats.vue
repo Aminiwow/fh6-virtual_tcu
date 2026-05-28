@@ -123,8 +123,18 @@ const { t, statsRows } = ctx
       <NTag :type="statsRows.calib ? 'success' : 'warning'" :bordered="false">
         {{ t('stats.gearRatios') }}: {{ statsRows.calib ? t('stats.learned') : t('stats.learningStatus') }}
       </NTag>
-      <NTag :type="statsRows.powerLearned ? 'success' : 'warning'" :bordered="false">
-        {{ t('stats.powerCurve') }}: {{ statsRows.powerLearned ? t('stats.learned') : t('stats.learningStatus') }}
+      <NTag
+        :type="statsRows.powerLearned ? 'success' : statsRows.powerAvailable ? 'info' : 'warning'"
+        :bordered="false"
+      >
+        {{ t('stats.powerCurve') }}:
+        {{
+          statsRows.powerLearned
+            ? t('stats.learned')
+            : statsRows.powerAvailable
+              ? `${t('stats.learningStatus')} ${statsRows.powerConfidence}%`
+              : t('stats.learningStatus')
+        }}
       </NTag>
     </NFlex>
   </template>

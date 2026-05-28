@@ -892,7 +892,15 @@
             pill.textContent = calibrated ? "已校准" : "学习中";
           }
           text("gearLearning", calibrated ? "已学习" : "学习中");
-          text("powerLearning", t.power_curve_learned ? "已学习" : "学习中");
+          var powerConfidence = Math.round(clamp(t.power_curve_confidence || 0, 0, 1) * 100);
+          text(
+            "powerLearning",
+            t.power_curve_learned
+              ? "已成熟"
+              : t.power_curve_available
+                ? "学习中 " + powerConfidence + "%"
+                : "学习中"
+          );
 
           var sport = clamp(t.drive_style_index, 0, 1);
           text("sportIndex", fixed(sport, 2));

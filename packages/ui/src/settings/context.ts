@@ -18,7 +18,9 @@ export interface StatsRows {
   avgThr: number
   cars: number
   calib: boolean | undefined
+  powerAvailable: boolean | undefined
   powerLearned: boolean | undefined
+  powerConfidence: number
 }
 
 export interface ShiftHistoryItem {

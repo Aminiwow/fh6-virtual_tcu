@@ -67,5 +67,7 @@ export interface TelemetrySnapshot {
   shift_history?: ShiftHistoryItem[]
   watchdog_stuck?: boolean
   log_status?: LogStatus
+  power_curve_available?: boolean
   power_curve_learned?: boolean
+  power_curve_confidence?: number
 }

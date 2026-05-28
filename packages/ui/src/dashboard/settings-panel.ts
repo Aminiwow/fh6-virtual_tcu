@@ -59,7 +59,9 @@ export function useSettingsPanel(
       avgThr: Math.round(s.avg_throttle),
       cars: s.cars_driven,
       calib: t?.calibrated,
+      powerAvailable: t?.power_curve_available,
       powerLearned: t?.power_curve_learned,
+      powerConfidence: Math.round((t?.power_curve_confidence ?? 0) * 100),
     }
   })
 
