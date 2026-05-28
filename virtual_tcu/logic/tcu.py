@@ -29,7 +29,7 @@ from virtual_tcu.telemetry.model import Telemetry
 
 
 class TCULogic:
-    PROFILE_SCHEMA = "fh6-dataout-2026-05-15-v1"
+    PROFILE_SCHEMA = "fh6-dataout-2026-05-15-v2-power-lookup"
 
     def __init__(
         self,
@@ -786,6 +786,14 @@ class TCULogic:
         if td.speed_kmh <= Cfg.MIN_SPEED_KMH:
             return False
 
+        performance_target = self._performance_upshift_target_pct(td, offset)
+        if performance_target is not None:
+            target_pct, source = performance_target
+            target_pct = min(target_pct, self._upshift_ceiling_pct(td))
+            if td.rpm_pct < target_pct:
+                return False
+            return self._shift_up(td, 300, "UPSHIFT", source)
+
         fallback = self._config.get("race_up_wot", 94) / 100
         mature_curve = self._power_curve.has_mature_data(td.car_key)
         target_pct = self._power_curve.optimal_upshift_rpm(
@@ -799,14 +807,81 @@ class TCULogic:
             return False
         return self._shift_up(td, 300, "UPSHIFT", "in band")
 
+    def _performance_upshift_target_pct(self, td: Telemetry, offset: float) -> tuple[float, str] | None:
+        if not self._config.get("feat_power_curve"):
+            return None
+        if td.gear < 1 or td.gear >= 10 or td.engine_max_rpm <= 0:
+            return None
+        if td.throttle < 0.55:
+            return None
+        current_ratio = self._calibrator.ratio_for_gear(td.car_key, td.gear)
+        next_ratio = self._calibrator.ratio_for_gear(td.car_key, td.gear + 1)
+        if not current_ratio or not next_ratio:
+            return None
+        if not self._power_curve.has_power_lookup(td.car_key):
+            return None
+
+        ceiling_pct = self._upshift_ceiling_pct(td)
+        peak_pct = self._power_curve.peak_power_rpm(td.car_key)
+        search_start = max(0.45, (peak_pct or 0.72) - 0.08)
+        search_end = max(search_start, min(ceiling_pct, 0.992))
+        step_pct = max(0.003, 50.0 / td.engine_max_rpm)
+        first_cross: float | None = None
+        best_pct = search_end
+        best_delta = -1e9
+        valid_points = 0
+
+        pct = search_start
+        while pct <= search_end + 1e-9:
+            rpm = td.engine_max_rpm * pct
+            next_rpm = rpm * next_ratio / current_ratio
+            if next_rpm < max(td.idle_rpm * 1.15, 900.0):
+                pct += step_pct
+                continue
+            cur_power = self._power_curve.power_at_rpm(td.car_key, rpm)
+            next_power = self._power_curve.power_at_rpm(td.car_key, next_rpm)
+            if cur_power is None or next_power is None:
+                pct += step_pct
+                continue
+            valid_points += 1
+            delta = next_power - cur_power
+            if delta > best_delta:
+                best_delta = delta
+                best_pct = pct
+            noise_margin_hp = max(1.0, min(6.0, cur_power * 0.01))
+            if first_cross is None and delta >= -noise_margin_hp:
+                first_cross = pct
+                break
+            pct += step_pct
+
+        if valid_points < 3:
+            return None
+
+        if first_cross is not None:
+            return min(max(first_cross, search_start), search_end), "power cross"
+
+        current_power = self._power_curve.power_at_rpm(td.car_key, td.current_rpm)
+        slope = self._power_curve.power_slope_at_rpm(td.car_key, td.current_rpm)
+        if (
+            current_power is not None
+            and slope is not None
+            and slope < -0.002
+            and best_delta >= -max(2.0, min(12.0, current_power * 0.02))
+            and td.rpm_pct >= max(search_start, (peak_pct or 0.72) + offset * 0.5)
+        ):
+            return min(max(best_pct, search_start), search_end), "falling power"
+
+        # No power crossing before the usable ceiling: hold the gear for max
+        # acceleration, then let the ceiling guard force the shift.
+        return search_end, "power ceiling"
+
     def _upshift_ceiling_pct(self, td: Telemetry) -> float:
-        if self._rev_limiter.effective_redline(td) is not None:
-            return 0.985
-        # FH6 can report a nominal max RPM above the practical fuel-cut point.
-        # Until the real limiter is learned, keep a conservative cap so a
-        # mature high-RPM power curve cannot command the same 94% fuel-cut hit
-        # that the legacy WOT slider could cause.
-        return 0.920
+        learned = self._rev_limiter.effective_redline(td)
+        if learned is not None and td.engine_max_rpm > 0:
+            return max(0.50, min(0.992, (learned - 80.0) / td.engine_max_rpm))
+        # Keep a small safety margin for unknown cars, but no longer cap at 92%;
+        # otherwise the limiter learner never gets high-RPM evidence.
+        return 0.975
 
     def _should_engine_brake(self, td: Telemetry) -> bool:
         if not self._config.get("feat_engine_brake"):

@@ -81,7 +81,7 @@ export default {
     peakPower: '峰值功率转速',
     learning: '学习中…',
     rpmSuffix: '% 转速',
-    hint: '大油门（>70%）下按车学习。赛道模式按峰值功率 +3%，并受真实断油/保守限转保护。',
+    hint: '大油门下按车学习。性能模式会比较当前挡和下一挡的功率，并保留真实断油保护。',
   },
   logger: {
     title: '回放日志',
@@ -160,7 +160,7 @@ export default {
     reset: '恢复默认',
     resetConfirm: '确定将所有设置恢复为默认值？',
     autosave: '自动保存至 tcu_config.json',
-    raceFallbackHint: '赛道模式学习未成熟时作为回退上限；曲线成熟后按峰值功率，并受真实断油/保守限转保护。',
+    raceFallbackHint: '仅在齿比或功率查表仍在学习时使用；学习完成后，赛道模式会在下一挡功率相同或更强时升档。',
     watchdog: '引擎似乎卡住 — 遥测未在处理',
     corneringLock: '弯道锁定',
     launchControlFeat: '弹射控制',

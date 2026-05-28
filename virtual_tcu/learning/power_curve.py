@@ -1,177 +1,265 @@
+from __future__ import annotations
+
+from bisect import bisect_left
+
 from virtual_tcu.telemetry.model import Telemetry
 
 
-class _ParabolaFit:
-    """Incremental least-squares fit of torque = a*r^2 + b*r + c, where r
-    is rpm fraction (0..1). Accumulators decay slowly so the model adapts
-    if the car setup changes. O(1) memory — only sums are kept."""
+W_PER_HP = 745.699872
+NM_RPM_PER_HP = 7127.0
 
-    DECAY = 0.9997
+
+class _PowerBin:
+    MAX_SAMPLES = 14
 
     def __init__(self):
-        self.n = self.sx = self.sx2 = self.sx3 = self.sx4 = 0.0
-        self.sy = self.sxy = self.sx2y = 0.0
-        self._abc = None
+        self.count = 0
+        self.power_samples: list[float] = []
+        self.torque_samples: list[float] = []
 
-    def add(self, x: float, y: float, weight: float = 1.0):
-        d = self.DECAY
-        self.n = self.n * d + weight
-        self.sx = self.sx * d + weight * x
-        self.sx2 = self.sx2 * d + weight * x * x
-        self.sx3 = self.sx3 * d + weight * x**3
-        self.sx4 = self.sx4 * d + weight * x**4
-        self.sy = self.sy * d + weight * y
-        self.sxy = self.sxy * d + weight * x * y
-        self.sx2y = self.sx2y * d + weight * x * x * y
-        self._abc = None
+    def add(self, power_hp: float, torque_nm: float):
+        self.count += 1
+        self._add_top_sample(self.power_samples, power_hp)
+        self._add_top_sample(self.torque_samples, torque_nm)
 
-    def solve(self):
-        """Return (a, b, c) of the fitted parabola, or None if ill-posed."""
-        if self._abc is not None:
-            return self._abc
-        if self.n < 4:
+    @classmethod
+    def _add_top_sample(cls, values: list[float], value: float):
+        if not value or value <= 0:
+            return
+        values.append(float(value))
+        values.sort(reverse=True)
+        del values[cls.MAX_SAMPLES :]
+
+    @staticmethod
+    def _robust_top(values: list[float]) -> float | None:
+        if not values:
             return None
-        m = [
-            [self.sx4, self.sx3, self.sx2],
-            [self.sx3, self.sx2, self.sx],
-            [self.sx2, self.sx, self.n],
-        ]
-        rhs = [self.sx2y, self.sxy, self.sy]
+        n = max(1, min(5, (len(values) + 2) // 3))
+        return sum(values[:n]) / n
 
-        def det3(mat):
-            return (
-                mat[0][0] * (mat[1][1] * mat[2][2] - mat[1][2] * mat[2][1])
-                - mat[0][1] * (mat[1][0] * mat[2][2] - mat[1][2] * mat[2][0])
-                + mat[0][2] * (mat[1][0] * mat[2][1] - mat[1][1] * mat[2][0])
-            )
+    @property
+    def power_hp(self) -> float | None:
+        return self._robust_top(self.power_samples)
 
-        det = det3(m)
-        if abs(det) < 1e-9:
-            return None
-
-        def swap(mat, col, vec):
-            return [[vec[r] if c == col else mat[r][c] for c in range(3)] for r in range(3)]
-
-        a = det3(swap(m, 0, rhs)) / det
-        b = det3(swap(m, 1, rhs)) / det
-        c = det3(swap(m, 2, rhs)) / det
-        self._abc = (a, b, c)
-        return self._abc
+    @property
+    def torque_nm(self) -> float | None:
+        return self._robust_top(self.torque_samples)
 
     def to_dict(self) -> dict:
-        """Serialise accumulator state so the fit can be restored later."""
         return {
-            "n": self.n,
-            "sx": self.sx,
-            "sx2": self.sx2,
-            "sx3": self.sx3,
-            "sx4": self.sx4,
-            "sy": self.sy,
-            "sxy": self.sxy,
-            "sx2y": self.sx2y,
+            "count": self.count,
+            "power_samples": self.power_samples,
+            "torque_samples": self.torque_samples,
         }
 
     @classmethod
-    def from_dict(cls, d: dict) -> "_ParabolaFit":
-        """Restore a fit from a previously-saved to_dict() snapshot."""
-        fit = cls()
-        for attr in ("n", "sx", "sx2", "sx3", "sx4", "sy", "sxy", "sx2y"):
-            if attr in d:
-                setattr(fit, attr, float(d[attr]))
-        return fit
+    def from_dict(cls, data: dict) -> "_PowerBin":
+        bin_ = cls()
+        bin_.count = int(data.get("count", 0))
+        power = data.get("power_samples", [])
+        torque = data.get("torque_samples", [])
+        if isinstance(power, list):
+            bin_.power_samples = sorted(
+                [float(v) for v in power if isinstance(v, (int, float)) and v > 0],
+                reverse=True,
+            )[: cls.MAX_SAMPLES]
+        if isinstance(torque, list):
+            bin_.torque_samples = sorted(
+                [float(v) for v in torque if isinstance(v, (int, float)) and v > 0],
+                reverse=True,
+            )[: cls.MAX_SAMPLES]
+        return bin_
+
+
+class _PowerCurveFit:
+    BIN_RPM = 50
+
+    def __init__(self):
+        self.max_rpm = 0.0
+        self.bins: dict[int, _PowerBin] = {}
+
+    @staticmethod
+    def _bin_rpm(rpm: float) -> int:
+        return int(round(rpm / _PowerCurveFit.BIN_RPM) * _PowerCurveFit.BIN_RPM)
+
+    def add(self, rpm: float, max_rpm: float, power_hp: float, torque_nm: float):
+        if rpm <= 0 or power_hp <= 0 or torque_nm <= 0:
+            return
+        self.max_rpm = max(self.max_rpm, max_rpm)
+        key = self._bin_rpm(rpm)
+        self.bins.setdefault(key, _PowerBin()).add(power_hp, torque_nm)
+
+    def points(self) -> list[tuple[int, float, float]]:
+        pts: list[tuple[int, float, float]] = []
+        for rpm, bin_ in self.bins.items():
+            power = bin_.power_hp
+            torque = bin_.torque_nm
+            if power is None or torque is None:
+                continue
+            pts.append((rpm, power, torque))
+        pts.sort(key=lambda p: p[0])
+        return pts
 
     @property
-    def x_spread(self) -> float:
-        if self.n < 2:
+    def total_samples(self) -> int:
+        return sum(bin_.count for bin_ in self.bins.values())
+
+    @property
+    def rpm_spread(self) -> float:
+        pts = self.points()
+        if len(pts) < 2 or self.max_rpm <= 0:
             return 0.0
-        mean = self.sx / self.n
-        var = self.sx2 / self.n - mean * mean
-        return var**0.5 if var > 0 else 0.0
+        return (pts[-1][0] - pts[0][0]) / self.max_rpm
+
+    def to_dict(self) -> dict:
+        return {
+            "format": "power_bins_v2",
+            "max_rpm": self.max_rpm,
+            "bin_rpm": self.BIN_RPM,
+            "bins": {str(rpm): bin_.to_dict() for rpm, bin_ in self.bins.items()},
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "_PowerCurveFit":
+        fit = cls()
+        fit.max_rpm = float(data.get("max_rpm", 0.0))
+        bins = data.get("bins", {})
+        if isinstance(bins, dict):
+            for rpm, bin_data in bins.items():
+                if not isinstance(bin_data, dict):
+                    continue
+                try:
+                    fit.bins[int(rpm)] = _PowerBin.from_dict(bin_data)
+                except (TypeError, ValueError):
+                    continue
+        return fit
 
 
 class PowerCurveDetector:
-    """Per-car engine model. Fits a parabola to (rpm, torque) samples and
-    derives peak torque and peak power analytically from the curve.
+    """Per-car full-load engine model.
 
-    Unlike a bucket histogram, this gives a usable estimate from very few
-    samples (the curve shape extrapolates the peak) and converges smoothly
-    as more data arrives — no binary learning/learned threshold."""
+    The shift logic needs power at arbitrary RPM, not only the peak. This
+    detector stores robust top samples per absolute-RPM bin, then interpolates
+    engine power so the TCU can compare the current gear against the next gear.
+    """
 
-    MIN_SAMPLES = 8
-    FULL_CONF_SAMPLES = 80
-    MIN_SPREAD = 0.06
-    GOOD_SPREAD = 0.16
+    MIN_SAMPLES = 12
+    FULL_CONF_SAMPLES = 110
+    MIN_SPREAD = 0.10
+    GOOD_SPREAD = 0.35
     TRUST_MODEL_CONFIDENCE = 0.35
+    MIN_THROTTLE = 0.70
+    MIN_CLEAN_SUSPENSION = 0.08
+    MAX_LEARN_SLIP = 1.5
+    MAX_SURFACE_RUMBLE = 0.20
 
     def __init__(self):
-        self._fits: dict[tuple, _ParabolaFit] = {}
+        self._fits: dict[tuple, _PowerCurveFit] = {}
+
+    @staticmethod
+    def _power_hp(td: Telemetry) -> float:
+        if abs(td.power_w) > 1.0:
+            return max(0.0, td.power_w / W_PER_HP)
+        if td.torque_nm > 0 and td.current_rpm > 0:
+            return td.torque_nm * td.current_rpm / NM_RPM_PER_HP
+        return 0.0
 
     def observe(self, td: Telemetry):
         ck = td.car_key
-        if ck[0] <= 0 or td.gear < 2:
+        if ck[0] <= 0 or td.gear < 1:
             return
-        if td.throttle < 0.45 or td.torque_nm <= 0 or td.is_shifting:
+        if td.throttle < self.MIN_THROTTLE or td.torque_nm <= 0 or td.is_shifting:
             return
-        if td.min_suspension_norm <= 0.08 or td.any_puddle or td.max_surface_rumble > 0.20:
+        if td.current_rpm < 500 or td.current_rpm > td.engine_max_rpm * 1.02:
             return
-        r = td.rpm_pct
-        if r < 0.20 or r > 1.0:
+        if (
+            td.min_suspension_norm <= self.MIN_CLEAN_SUSPENSION
+            or td.any_puddle
+            or td.max_surface_rumble > self.MAX_SURFACE_RUMBLE
+            or td.max_combined_slip > self.MAX_LEARN_SLIP
+        ):
             return
-        # Partial throttle and some slip still carry curve-shape info but
-        # weigh less — the least-squares fit absorbs them as soft evidence.
-        weight = 1.0
-        if td.throttle < 0.70:
-            weight *= 0.5
-        if td.max_combined_slip > 0.5:
-            weight *= 0.4
-        self._fits.setdefault(ck, _ParabolaFit()).add(r, td.torque_nm, weight)
+
+        power_hp = self._power_hp(td)
+        if power_hp <= 1.0:
+            return
+        self._fits.setdefault(ck, _PowerCurveFit()).add(
+            td.current_rpm,
+            td.engine_max_rpm,
+            power_hp,
+            td.torque_nm,
+        )
 
     def _peaks(self, car_key: tuple):
-        """Return (peak_torque_rpm, peak_power_rpm, confidence)."""
+        """Return (peak_torque_pct, peak_power_pct, confidence)."""
         fit = self._fits.get(car_key)
-        if fit is None or fit.n < self.MIN_SAMPLES:
+        if fit is None or fit.total_samples < self.MIN_SAMPLES:
             return None, None, 0.0
-        abc = fit.solve()
-        if abc is None:
-            return None, None, 0.0
-        a, b, c = abc
-        if a >= -1e-6:  # not concave-down → no torque peak in range yet
+        pts = fit.points()
+        if len(pts) < 3 or fit.max_rpm <= 0:
             return None, None, 0.0
 
-        pt = max(0.40, min(0.98, -b / (2 * a)))
-
-        # Peak power: maximize torque*rpm = a r^3 + b r^2 + c r.
-        # dP/dr = 3a r^2 + 2b r + c.
-        deriv_at_redline = 3 * a + 2 * b + c
-        if deriv_at_redline > 0:
-            # Power still climbing at the limiter — high-rev NA engines
-            # (e.g. BMW S54). The "peak" is effectively the redline:
-            # shift as late as possible.
-            pp = 0.97
-        else:
-            disc = 4 * b * b - 12 * a * c
-            if disc < 0:
-                pp = min(pt + 0.10, 0.95)
-            else:
-                sq = disc**0.5
-                roots = [(-2 * b + sq) / (6 * a), (-2 * b - sq) / (6 * a)]
-                cands = [r for r in roots if pt - 0.02 <= r <= 1.0]
-                pp = max(cands) if cands else min(pt + 0.10, 0.95)
-        pp = max(pt, min(0.97, pp))
+        peak_power = max(pts, key=lambda p: p[1])
+        peak_torque = max(pts, key=lambda p: p[2])
 
         n_conf = max(
-            0.0, min(1.0, (fit.n - self.MIN_SAMPLES) / (self.FULL_CONF_SAMPLES - self.MIN_SAMPLES))
+            0.0,
+            min(1.0, (fit.total_samples - self.MIN_SAMPLES) / (self.FULL_CONF_SAMPLES - self.MIN_SAMPLES)),
         )
         s_conf = max(
-            0.0, min(1.0, (fit.x_spread - self.MIN_SPREAD) / (self.GOOD_SPREAD - self.MIN_SPREAD))
+            0.0,
+            min(1.0, (fit.rpm_spread - self.MIN_SPREAD) / (self.GOOD_SPREAD - self.MIN_SPREAD)),
         )
-        return pt, pp, n_conf * s_conf
+        confidence = n_conf * s_conf
+        return peak_torque[0] / fit.max_rpm, peak_power[0] / fit.max_rpm, confidence
+
+    def _point_arrays(self, car_key: tuple) -> tuple[list[int], list[float]] | None:
+        fit = self._fits.get(car_key)
+        if fit is None:
+            return None
+        pts = fit.points()
+        if len(pts) < 3:
+            return None
+        return [p[0] for p in pts], [p[1] for p in pts]
+
+    def power_at_rpm(self, car_key: tuple, rpm: float) -> float | None:
+        arrays = self._point_arrays(car_key)
+        if arrays is None:
+            return None
+        rpms, powers = arrays
+        if rpm < rpms[0] - _PowerCurveFit.BIN_RPM or rpm > rpms[-1] + _PowerCurveFit.BIN_RPM:
+            return None
+        idx = bisect_left(rpms, rpm)
+        if idx <= 0:
+            return powers[0]
+        if idx >= len(rpms):
+            return powers[-1]
+        left_rpm, right_rpm = rpms[idx - 1], rpms[idx]
+        left_power, right_power = powers[idx - 1], powers[idx]
+        if right_rpm == left_rpm:
+            return left_power
+        t = (rpm - left_rpm) / (right_rpm - left_rpm)
+        return left_power + (right_power - left_power) * t
+
+    def power_slope_at_rpm(self, car_key: tuple, rpm: float, step_rpm: float = 200.0) -> float | None:
+        low = self.power_at_rpm(car_key, rpm - step_rpm)
+        high = self.power_at_rpm(car_key, rpm + step_rpm)
+        if low is None or high is None:
+            return None
+        return (high - low) / (2.0 * step_rpm)
 
     def peak_torque_rpm(self, car_key: tuple) -> float | None:
         return self._peaks(car_key)[0]
 
     def peak_power_rpm(self, car_key: tuple) -> float | None:
         return self._peaks(car_key)[1]
+
+    def peak_power_abs_rpm(self, car_key: tuple) -> float | None:
+        pct = self.peak_power_rpm(car_key)
+        fit = self._fits.get(car_key)
+        if pct is None or fit is None or fit.max_rpm <= 0:
+            return None
+        return pct * fit.max_rpm
 
     def confidence(self, car_key: tuple) -> float:
         return self._peaks(car_key)[2]
@@ -183,14 +271,12 @@ class PowerCurveDetector:
         offset: float = 0.03,
         blend_fallback: bool = True,
     ) -> float:
-        pt, pp, conf = self._peaks(td.car_key)
+        _, pp, conf = self._peaks(td.car_key)
         if pp is None:
             return fallback
-        model = max(0.65, min(0.97, pp + offset))
+        model = max(0.65, min(0.985, pp + offset))
         if not blend_fallback or conf >= self.TRUST_MODEL_CONFIDENCE:
             return model
-        # Blend: early low-confidence estimates lean on the fallback,
-        # mature ones trust the model fully.
         return conf * model + (1.0 - conf) * fallback
 
     def has_data(self, car_key: tuple) -> bool:
@@ -199,13 +285,17 @@ class PowerCurveDetector:
     def has_mature_data(self, car_key: tuple) -> bool:
         return self.confidence(car_key) >= self.TRUST_MODEL_CONFIDENCE
 
+    def has_power_lookup(self, car_key: tuple) -> bool:
+        fit = self._fits.get(car_key)
+        return bool(fit and len(fit.points()) >= 8 and self.confidence(car_key) >= 0.20)
+
     def dump(self, car_key: tuple) -> dict | None:
-        """Serialise the parabola fit for *car_key*, or None if no data."""
         fit = self._fits.get(car_key)
         return fit.to_dict() if fit is not None else None
 
     def load(self, car_key: tuple, data: dict):
-        """Restore a parabola fit from a previously-saved dump."""
         if not isinstance(data, dict):
             return
-        self._fits[car_key] = _ParabolaFit.from_dict(data)
+        if data.get("format") != "power_bins_v2":
+            return
+        self._fits[car_key] = _PowerCurveFit.from_dict(data)

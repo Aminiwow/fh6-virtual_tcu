@@ -84,7 +84,7 @@ export default {
     learning: 'learning…',
     rpmSuffix: '% RPM',
     hint:
-      'Learned per car at >70% throttle. Race uses peak power +3%, capped by learned fuel-cut or a conservative RPM guard.',
+      'Learned per car at high throttle. Performance modes compare current-gear and next-gear power, with learned fuel-cut protection.',
   },
   logger: {
     title: 'Replay Logger',
@@ -164,7 +164,7 @@ export default {
     resetConfirm: 'Reset all settings to defaults?',
     autosave: 'Auto-saved to tcu_config.json',
     raceFallbackHint:
-      'Race mode uses this as the fallback cap while learning; mature power curves shift by peak power with learned fuel-cut or conservative RPM protection.',
+      'Used only while gear ratios or power lookup are still learning. Once learned, Race shifts when the next gear can make equal or better power.',
     watchdog: 'Engine appears stuck — telemetry not processing',
     corneringLock: 'Cornering Lock',
     launchControlFeat: 'Launch Control',

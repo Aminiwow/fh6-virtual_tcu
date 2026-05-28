@@ -183,6 +183,9 @@ class GearRatioCalibrator:
     def get_ratios(self, car_key: tuple) -> dict[int, float]:
         return self._valid_ratios(car_key)
 
+    def ratio_for_gear(self, car_key: tuple, gear: int) -> float | None:
+        return self.get_ratios(car_key).get(gear)
+
     def has_data(self, car_key: tuple) -> bool:
         return len(self.get_ratios(car_key)) >= 2
 
