@@ -29,7 +29,11 @@ from virtual_tcu.telemetry.model import Telemetry
 
 
 class TCULogic:
-    PROFILE_SCHEMA = "fh6-dataout-2026-05-15-v7-smart-limiter"
+    PROFILE_SCHEMA = "fh6-dataout-2026-05-15-v8-smart-margin"
+    COMPAT_PROFILE_SCHEMAS = {
+        PROFILE_SCHEMA,
+        "fh6-dataout-2026-05-15-v7-smart-limiter",
+    }
 
     def __init__(
         self,
@@ -67,6 +71,7 @@ class TCULogic:
         self._brake_history = deque(maxlen=10)
         self._throttle_history = deque(maxlen=6)
         self._speed_history = deque(maxlen=20)
+        self._rpm_rate_history = deque(maxlen=8)
         self._brake_raw_history = deque(maxlen=10)
         self._throttle_raw_history = deque(maxlen=10)
         self._no_downshift_until = 0.0
@@ -78,6 +83,11 @@ class TCULogic:
         self._prev_gear = -1
         self._we_shifted = False
         self._slip_streak = 0
+        self._last_rpm_sample: tuple[float, float] | None = None
+        self._pending_upshift_gear: int | None = None
+        self._pending_upshift_until = 0.0
+        self._last_saved_profile_at = 0.0
+        self._last_profile_signature: tuple | None = None
 
         self._reverse_lock_until = 0.0
         self._current_car_key: tuple | None = None
@@ -139,13 +149,35 @@ class TCULogic:
             profile["telemetry_schema"] = self.PROFILE_SCHEMA
             profile["updated_at"] = datetime.now(UTC).isoformat()
             self._profiles.set(ck, profile)
+            self._last_saved_profile_at = time.time()
+            self._last_profile_signature = self._profile_signature(ck)
+
+    def _profile_signature(self, ck: tuple) -> tuple:
+        return (
+            self._rev_limiter.dump(ck),
+            self._calibrator.has_data(ck),
+            self._power_curve.has_mature_data(ck),
+            round(self._power_curve.confidence(ck), 2),
+        )
+
+    def _save_profiles_if_changed(self, now: float, *, force: bool = False):
+        ck = self._current_car_key
+        if ck is None or ck[0] <= 0:
+            return
+        sig = self._profile_signature(ck)
+        if sig == self._last_profile_signature and not force:
+            return
+        min_interval = 2.0 if force else 15.0
+        if now - self._last_saved_profile_at < min_interval:
+            return
+        self.save_profiles()
 
     def _load_profiles(self, ck: tuple):
         """Restore learning data from ProfileStore for *ck*."""
         data = self._profiles.get(ck)
         if data is None:
             return
-        if data.get("telemetry_schema") != self.PROFILE_SCHEMA:
+        if data.get("telemetry_schema") not in self.COMPAT_PROFILE_SCHEMAS:
             return
         if "gear_ratios" in data:
             self._calibrator.load(
@@ -365,8 +397,12 @@ class TCULogic:
             self._brake_history.clear()
             self._throttle_history.clear()
             self._speed_history.clear()
+            self._rpm_rate_history.clear()
             self._brake_raw_history.clear()
             self._throttle_raw_history.clear()
+            self._last_rpm_sample = None
+            self._pending_upshift_gear = None
+            self._pending_upshift_until = 0.0
             self._tcu_state = "RESUMING"
             self._tcu_state_sub = "from menu/pause"
 
@@ -386,6 +422,13 @@ class TCULogic:
                 if not airborne:
                     hold_s = 2.5 if external_downshift and self.mode == Mode.RACE else 1.5 if external_downshift else 0.5
                     self._no_upshift_until = max(self._no_upshift_until, now + hold_s)
+            elif self._pending_upshift_gear is not None and td.gear >= self._pending_upshift_gear:
+                self._pending_upshift_gear = None
+                self._pending_upshift_until = 0.0
+                self._no_upshift_until = min(self._no_upshift_until, now + 0.15)
+        if self._pending_upshift_gear is not None and now > self._pending_upshift_until:
+            self._pending_upshift_gear = None
+            self._pending_upshift_until = 0.0
         self._prev_gear = td.gear
         self._we_shifted = False
 
@@ -422,6 +465,7 @@ class TCULogic:
             self._current_car_key = ck
             self._peak_rpm = 0.0
             self._peak_g = 0.0
+            self._last_profile_signature = None
             # Reset per-tune learning data so stale ratios / curves from a
             # different build don't poison shift decisions.
             self._calibrator._ratios.pop(ck, None)
@@ -432,18 +476,31 @@ class TCULogic:
             self._rev_limiter.reset_car(ck)
             # Restore previously-saved learning data for this car+tune.
             self._load_profiles(ck)
+            self._last_profile_signature = self._profile_signature(ck)
 
         self._update_turbo(td, dt)
+        self._update_rpm_rate(td, now)
         self._update_attitude(td)
         self._calibrator.observe(td)
 
         in_shift_settle = now < self._lock_until
 
         if not in_shift_settle:
+            before_limiter = self._rev_limiter.effective_redline(td)
             self._rev_limiter.observe(td, self._last_downshift_time, now)
+            after_limiter = self._rev_limiter.effective_redline(td)
+            if after_limiter != before_limiter:
+                self._record_decision(
+                    "learn_limiter",
+                    td,
+                    learned_limiter=after_limiter,
+                    previous_limiter=before_limiter,
+                )
+                self._save_profiles_if_changed(now, force=True)
 
         if self._config.get("feat_power_curve") and not in_shift_settle:
             self._power_curve.observe(td)
+        self._save_profiles_if_changed(now)
         if self._config.get("feat_airtime_lock"):
             self._airtime.update(td)
         if self._config.get("feat_transient_lock"):
@@ -556,11 +613,16 @@ class TCULogic:
         now = time.time()
         self._lock_until = now + (lock_ms / 1000.0)
         self._no_upshift_until = max(self._no_upshift_until, self._lock_until)
+        pending_until = now + max(lock_ms / 1000.0, 0.65)
+        self._pending_upshift_gear = td.gear + 1
+        self._pending_upshift_until = pending_until
+        self._no_upshift_until = max(self._no_upshift_until, pending_until)
         self._no_downshift_until = max(self._no_downshift_until, now + 1.0)
         self._we_shifted = True
         self._shift_count += 1
         self._kb.shift_up()
         self._logger.mark_event()
+        self._record_decision("shift_up", td, state=state, reason=sub)
         self._shift_history.record("UP", td, reason=state, rule=self.mode.value)
         self._session_stats.record_shift("UP", state)
         if WINSOUND_OK and self._config.get("feat_sound_beep"):
@@ -601,6 +663,7 @@ class TCULogic:
         self._last_downshift_time = now
         self._kb.shift_down()
         self._logger.mark_event()
+        self._record_decision("shift_down", td, state=state, reason=sub)
         self._shift_history.record("DOWN", td, reason=state, rule=self.mode.value)
         self._session_stats.record_shift("DOWN", state)
         if WINSOUND_OK and self._config.get("feat_sound_beep"):
@@ -630,6 +693,7 @@ class TCULogic:
         self._last_downshift_time = now
         self._kb.shift_down_double()
         self._logger.mark_event()
+        self._record_decision("shift_down_double", td, state="BRAKE DOWN", reason=f"skip to {target}")
         self._shift_history.record("DOWN", td, reason="SKIP DOWN", rule=self.mode.value)
         self._session_stats.record_shift("DOWN", "BRAKE DOWN")
         self._session_stats.record_shift("DOWN", "BRAKE DOWN")
@@ -675,6 +739,56 @@ class TCULogic:
         old = sum(recent[:3]) / 3
         new = sum(recent[-3:]) / 3
         return max(0.0, new - old)
+
+    def _update_rpm_rate(self, td: Telemetry, now: float):
+        prev = self._last_rpm_sample
+        self._last_rpm_sample = (now, td.current_rpm)
+        if prev is None or td.engine_max_rpm <= 0 or td.current_rpm <= 0:
+            return
+        prev_t, prev_rpm = prev
+        dt = now - prev_t
+        if dt <= 0.001 or dt > 0.25:
+            return
+        rate = (td.current_rpm - prev_rpm) / dt
+        if -5000.0 <= rate <= 16000.0:
+            self._rpm_rate_history.append(rate)
+
+    def _rpm_rise_rate(self) -> float:
+        rates = [r for r in self._rpm_rate_history if r > 0.0]
+        if not rates:
+            return 0.0
+        return sum(rates) / len(rates)
+
+    def _race_limiter_margin_rpm(self, td: Telemetry) -> float:
+        # Estimate how much RPM the engine can gain during command latency and
+        # the first part of the shift, then clamp it so bad telemetry cannot
+        # create an unreachable or overly early target.
+        rise_rate = self._rpm_rise_rate()
+        base = 155.0
+        dynamic = rise_rate * 0.018
+        if td.gear <= 2:
+            dynamic += 15.0
+        if td.throttle > 0.90:
+            dynamic += 10.0
+        return max(160.0, min(200.0, base + dynamic))
+
+    def _record_decision(self, event: str, td: Telemetry, **extra):
+        data = {
+            "event": event,
+            "mode": self.mode.value,
+            "gear": td.gear,
+            "rpm": round(td.current_rpm, 1),
+            "rpm_max": round(td.engine_max_rpm, 1),
+            "rpm_pct": round(td.rpm_pct, 4),
+            "speed_kmh": round(td.speed_kmh, 1),
+            "throttle": round(td.throttle, 3),
+            "brake": round(td.brake, 3),
+            "power_kw": round(td.power_w / 1000.0, 1),
+            "slip": round(td.max_combined_slip, 3),
+            "car_key": list(td.car_key),
+        }
+        data.update(extra)
+        self._logger.record_decision(data)
 
     def _should_brake_downshift(self, td: Telemetry, base_thr: float) -> bool:
         if td.brake < base_thr:
@@ -727,6 +841,10 @@ class TCULogic:
             return False
         if td.gear <= 1 or td.speed_kmh <= 25.0:
             return False
+        if self._brake_slip_downshift_block(td):
+            self._tcu_state = "BRAKE HOLD"
+            self._tcu_state_sub = "wheel slip"
+            return False
 
         brake_margin = 0.20 * min(1.0, td.brake / 0.80)
         projected_speed = td.speed_kmh * (1.0 - brake_margin)
@@ -752,6 +870,18 @@ class TCULogic:
             return False
 
         self._no_upshift_until = now + 0.5
+        return True
+
+    def _brake_slip_downshift_block(self, td: Telemetry) -> bool:
+        if td.brake < 0.55 or td.max_combined_slip < 2.6:
+            return False
+        if td.rpm_pct < 0.38:
+            return False
+        if td.gear <= 2:
+            return False
+        projected = self._calibrator.project_rpm_after_shift(td, td.gear - 1)
+        if projected is not None and projected < td.engine_max_rpm * 0.58:
+            return False
         return True
 
     def _track_out_of_band_kickdown(
@@ -826,8 +956,9 @@ class TCULogic:
 
         learned = self._rev_limiter.effective_redline(td)
         if learned is not None:
-            target = max(0.60, (learned - 180.0) / td.engine_max_rpm)
-            return min(target, 0.985), "learned limiter"
+            margin = self._race_limiter_margin_rpm(td)
+            target = max(0.60, (learned - margin) / td.engine_max_rpm)
+            return min(target, 0.985), f"learned limiter -{margin:.0f}"
 
         configured = self._config.get("race_up_wot", 98) / 100
         return max(0.88, min(0.99, configured)), "race fallback"

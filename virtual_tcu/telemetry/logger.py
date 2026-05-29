@@ -1,4 +1,5 @@
 import gzip
+import json
 import struct
 import threading
 import time
@@ -25,6 +26,7 @@ class TelemetryLogger:
         self._bytes_written = 0
         self._buffer: deque[tuple] = deque(maxlen=60)
         self._post_event_remaining = 0
+        self._decision_path: Path | None = None
 
     @property
     def is_recording(self) -> bool:
@@ -90,6 +92,26 @@ class TelemetryLogger:
                 self._write_record_locked(buf_ms, buf_raw)
             self._buffer.clear()
             self._post_event_remaining = 30
+
+    def record_decision(self, event: dict):
+        """Append a low-rate TCU decision event as JSONL.
+
+        This intentionally lives next to replay logs instead of inside the
+        binary replay stream, so old replay readers remain compatible.
+        """
+        try:
+            payload = dict(event)
+            payload.setdefault("ts", time.strftime("%Y-%m-%dT%H:%M:%S"))
+            line = json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n"
+            with self._lock:
+                if self._decision_path is None:
+                    ts = time.strftime("%Y%m%d")
+                    self._decision_path = paths.log_dir() / f"tcu_decisions_{ts}.jsonl"
+                self._decision_path.parent.mkdir(parents=True, exist_ok=True)
+                with self._decision_path.open("a", encoding="utf-8") as f:
+                    f.write(line)
+        except Exception as e:
+            print(f"[Logger] decision log error: {e}")
 
     def write_packet(self, raw: bytes):
         with self._lock:
