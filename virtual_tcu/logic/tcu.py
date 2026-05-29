@@ -323,6 +323,7 @@ class TCULogic:
                     "drive_style_index": 0.0,
                     "drive_style_regime": "CRUISE",
                     "airborne": False,
+                    "landing_recovery": False,
                     "yaw_transient": False,
                     "peak_power_rpm_pct": None,
                     "peak_torque_rpm_pct": None,
@@ -365,6 +366,7 @@ class TCULogic:
                 "drive_style_index": round(self._drive_style.index, 2),
                 "drive_style_regime": self._drive_style.regime,
                 "airborne": self._airtime.is_airborne,
+                "landing_recovery": self._airtime.landing_recovery(),
                 "yaw_transient": self._yaw_transient.is_blocking,
                 "peak_power_rpm_pct": self._power_curve.peak_power_rpm(td.car_key),
                 "peak_torque_rpm_pct": self._power_curve.peak_torque_rpm(td.car_key),
@@ -420,7 +422,13 @@ class TCULogic:
                 if td.brake < 0.30 and not airborne:
                     self._no_downshift_until = max(self._no_downshift_until, now + 0.8)
                 if not airborne:
-                    hold_s = 2.5 if external_downshift and self.mode == Mode.RACE else 1.5 if external_downshift else 0.5
+                    hold_s = (
+                        2.5
+                        if external_downshift and self.mode == Mode.RACE
+                        else 1.5
+                        if external_downshift
+                        else 0.5
+                    )
                     self._no_upshift_until = max(self._no_upshift_until, now + hold_s)
             elif self._pending_upshift_gear is not None and td.gear >= self._pending_upshift_gear:
                 self._pending_upshift_gear = None
@@ -502,7 +510,12 @@ class TCULogic:
             self._power_curve.observe(td)
         self._save_profiles_if_changed(now)
         if self._config.get("feat_airtime_lock"):
-            self._airtime.update(td)
+            self._airtime.update(td, now)
+            if self._airtime.just_landed:
+                self._no_downshift_until = 0.0
+                self._no_predictive_until = 0.0
+                self._lock_until = min(self._lock_until, now + 0.10)
+                self._no_upshift_until = max(self._no_upshift_until, now + 0.45)
         if self._config.get("feat_transient_lock"):
             self._yaw_transient.update(td, now)
         if self._config.get("feat_drive_style"):
@@ -596,7 +609,15 @@ class TCULogic:
         elif m == Mode.OFFROAD:
             self._mode_offroad(td, now)
 
-    def _shift_up(self, td: Telemetry, lock_ms: int, state: str, sub: str = "") -> bool:
+    def _shift_up(
+        self,
+        td: Telemetry,
+        lock_ms: int,
+        state: str,
+        sub: str = "",
+        *,
+        downshift_lock_s: float = 1.0,
+    ) -> bool:
         if td.gear >= 10:
             return False
         if self._config.get("feat_airtime_lock") and self._airtime.is_airborne:
@@ -617,7 +638,7 @@ class TCULogic:
         self._pending_upshift_gear = td.gear + 1
         self._pending_upshift_until = pending_until
         self._no_upshift_until = max(self._no_upshift_until, pending_until)
-        self._no_downshift_until = max(self._no_downshift_until, now + 1.0)
+        self._no_downshift_until = max(self._no_downshift_until, now + downshift_lock_s)
         self._we_shifted = True
         self._shift_count += 1
         self._kb.shift_up()
@@ -629,7 +650,15 @@ class TCULogic:
             self._audio_executor.submit(winsound.Beep, 3000, 40)
         return True
 
-    def _shift_down(self, td: Telemetry, lock_ms: int, state: str, sub: str = "") -> bool:
+    def _shift_down(
+        self,
+        td: Telemetry,
+        lock_ms: int,
+        state: str,
+        sub: str = "",
+        *,
+        cascade_lock_s: float | None = None,
+    ) -> bool:
         if td.gear <= 1:
             return False
         now = time.time()
@@ -648,7 +677,9 @@ class TCULogic:
         self._tcu_state_sub = sub
         self._lock_until = now + (lock_ms / 1000.0)
 
-        if state in ("BRAKE DOWN", "MISMATCH", "ENGINE BRAKE") or td.brake > 0.45:
+        if cascade_lock_s is not None:
+            cascade_lock = cascade_lock_s
+        elif state in ("BRAKE DOWN", "MISMATCH", "ENGINE BRAKE") or td.brake > 0.45:
             cascade_lock = 0.30
         elif state in ("KICKDOWN", "PREDICTIVE", "TORQUE DOWN", "BAND DOWN"):
             cascade_lock = 0.70
@@ -670,7 +701,15 @@ class TCULogic:
             self._audio_executor.submit(winsound.Beep, 1500, 50)
         return True
 
-    def _shift_down_double(self, td: Telemetry, lock_ms: int, target: int) -> bool:
+    def _shift_down_double(
+        self,
+        td: Telemetry,
+        lock_ms: int,
+        target: int,
+        *,
+        state: str = "BRAKE DOWN",
+        cascade_lock_s: float = 0.30,
+    ) -> bool:
         if td.gear <= 2:
             return False
         now = time.time()
@@ -684,19 +723,19 @@ class TCULogic:
         if projected > td.engine_max_rpm * Cfg.OVER_REV_LIMIT:
             return False
 
-        self._tcu_state = "BRAKE DOWN"
+        self._tcu_state = state
         self._tcu_state_sub = f"skip →{target}"
         self._lock_until = now + (lock_ms / 1000.0)
-        self._no_downshift_until = now + 0.30
+        self._no_downshift_until = now + cascade_lock_s
         self._we_shifted = True
         self._shift_count += 2
         self._last_downshift_time = now
         self._kb.shift_down_double()
         self._logger.mark_event()
-        self._record_decision("shift_down_double", td, state="BRAKE DOWN", reason=f"skip to {target}")
+        self._record_decision("shift_down_double", td, state=state, reason=f"skip to {target}")
         self._shift_history.record("DOWN", td, reason="SKIP DOWN", rule=self.mode.value)
-        self._session_stats.record_shift("DOWN", "BRAKE DOWN")
-        self._session_stats.record_shift("DOWN", "BRAKE DOWN")
+        self._session_stats.record_shift("DOWN", state)
+        self._session_stats.record_shift("DOWN", state)
         if WINSOUND_OK and self._config.get("feat_sound_beep"):
             self._audio_executor.submit(winsound.Beep, 1500, 50)
         return True
@@ -714,6 +753,14 @@ class TCULogic:
         if len(self._speed_history) < 15:
             return False
         return (max(self._speed_history) - min(self._speed_history)) < delta_kmh
+
+    def _speed_decreasing(self, delta_kmh: float = 0.8) -> bool:
+        if len(self._speed_history) < 8:
+            return False
+        recent = list(self._speed_history)
+        old_speed = sum(recent[:4]) / 4
+        new_speed = sum(recent[-4:]) / 4
+        return (old_speed - new_speed) > delta_kmh
 
     def _kickdown_pedal_threshold(self, td: Telemetry, base: float) -> float:
         if not self._config.get("feat_drivetrain_aware"):
@@ -803,6 +850,23 @@ class TCULogic:
                 return True
         return False
 
+    def _should_track_brake_downshift(self, td: Telemetry, base_thr: float) -> bool:
+        if td.brake < base_thr:
+            return False
+        if not self._config.get("feat_brake_curve"):
+            return True
+        if self._brake_is_spike():
+            return True
+        if td.brake > 0.45:
+            return True
+        if td.brake > 0.30 and self._speed_decreasing(delta_kmh=0.6):
+            return True
+        if len(self._brake_raw_history) >= 6 and td.brake > base_thr + 0.10:
+            recent = list(self._brake_raw_history)[-6:]
+            if min(recent) > base_thr:
+                return True
+        return False
+
     def _wheelspin_upshift_now(self, td: Telemetry) -> bool:
         if not self._config.get("feat_drivetrain_aware"):
             return False
@@ -835,9 +899,21 @@ class TCULogic:
             return False
 
     def _track_brake_down(
-        self, td: Telemetry, now: float, brake_thr: float, lock_ms: int = 250
+        self,
+        td: Telemetry,
+        now: float,
+        brake_thr: float,
+        lock_ms: int = 250,
+        *,
+        track_brake: bool = False,
+        cascade_lock_s: float | None = None,
     ) -> bool:
-        if not self._should_brake_downshift(td, brake_thr):
+        should_downshift = (
+            self._should_track_brake_downshift(td, brake_thr)
+            if track_brake
+            else self._should_brake_downshift(td, brake_thr)
+        )
+        if not should_downshift:
             return False
         if td.gear <= 1 or td.speed_kmh <= 25.0:
             return False
@@ -855,7 +931,12 @@ class TCULogic:
                 return False
 
         if target is not None and target <= td.gear - 3 and td.brake > 0.80 and td.gear >= 4:
-            if self._shift_down_double(td, lock_ms, target):
+            if self._shift_down_double(
+                td,
+                lock_ms,
+                target,
+                cascade_lock_s=cascade_lock_s or 0.30,
+            ):
                 self._no_upshift_until = now + 0.5
                 return True
 
@@ -866,7 +947,7 @@ class TCULogic:
         else:
             sub = "panic brake"
 
-        if not self._shift_down(td, lock_ms, "BRAKE DOWN", sub):
+        if not self._shift_down(td, lock_ms, "BRAKE DOWN", sub, cascade_lock_s=cascade_lock_s):
             return False
 
         self._no_upshift_until = now + 0.5
@@ -885,7 +966,14 @@ class TCULogic:
         return True
 
     def _track_out_of_band_kickdown(
-        self, td: Telemetry, now: float, climb_only: bool = False
+        self,
+        td: Telemetry,
+        now: float,
+        climb_only: bool = False,
+        *,
+        lock_ms: int = 400,
+        cascade_lock_s: float | None = None,
+        upshift_lock_s: float = 0.8,
     ) -> bool:
         climbing = self._on_climb(td)
         if climb_only and not climbing:
@@ -898,19 +986,272 @@ class TCULogic:
             return False
 
         peak_torque_abs = self._power_curve.peak_torque_abs_rpm(td.car_key)
-        threshold = peak_torque_abs / td.engine_max_rpm - 0.10 if peak_torque_abs is not None else 0.55
+        threshold = (
+            peak_torque_abs / td.engine_max_rpm - 0.10 if peak_torque_abs is not None else 0.55
+        )
         if climbing:
             threshold += 0.08
 
         if td.rpm_pct >= threshold:
             return False
-        if not self._shift_down(td, 400, "BAND DOWN", "climb" if climbing else "out of band"):
+        if not self._shift_down(
+            td,
+            lock_ms,
+            "BAND DOWN",
+            "climb" if climbing else "out of band",
+            cascade_lock_s=cascade_lock_s,
+        ):
             return False
-        self._no_upshift_until = now + 0.8
+        self._no_upshift_until = now + upshift_lock_s
         return True
 
+    def _safe_downshift_redline(self, td: Telemetry, margin: float = 0.985) -> float:
+        learned = self._rev_limiter.effective_redline(td)
+        redline = learned if learned is not None else td.engine_max_rpm
+        return redline * margin
+
+    def _power_floor_pct(
+        self,
+        td: Telemetry,
+        *,
+        fallback: float,
+        torque_offset: float,
+        min_floor: float,
+        max_floor: float,
+    ) -> float:
+        peak_torque = self._power_curve.peak_torque_rpm(td.car_key)
+        if peak_torque is None or self._power_curve.confidence(td.car_key) < 0.20:
+            return fallback
+        return max(min_floor, min(max_floor, peak_torque + torque_offset))
+
+    def _power_target_rpm(
+        self,
+        td: Telemetry,
+        *,
+        fallback_pct: float,
+        bias: float,
+    ) -> float:
+        peak_torque = self._power_curve.peak_torque_abs_rpm(td.car_key)
+        peak_power = self._power_curve.peak_power_abs_rpm(td.car_key)
+        if peak_torque is None or peak_power is None:
+            target = td.engine_max_rpm * fallback_pct
+        else:
+            peak_power = max(peak_power, peak_torque)
+            target = peak_torque + (peak_power - peak_torque) * bias
+
+        if self._turbo_lag_block_upshift(td):
+            target = max(target, td.engine_max_rpm * 0.68)
+        return max(td.engine_max_rpm * 0.45, min(target, self._safe_downshift_redline(td)))
+
+    def _projected_power_is_better(self, td: Telemetry, projected_rpm: float) -> bool:
+        if not self._power_curve.has_power_lookup(td.car_key):
+            return True
+        current_power = self._power_curve.power_at_rpm(td.car_key, td.current_rpm)
+        projected_power = self._power_curve.power_at_rpm(td.car_key, projected_rpm)
+        if current_power is None or projected_power is None:
+            return True
+        margin = max(4.0, current_power * 0.015)
+        return projected_power >= current_power + margin
+
+    def _target_gear_for_power(
+        self,
+        td: Telemetry,
+        *,
+        fallback_pct: float,
+        target_bias: float,
+        floor_pct: float,
+    ) -> tuple[int, float] | None:
+        if td.engine_max_rpm <= 0 or td.gear <= 1:
+            return None
+
+        target_rpm = self._power_target_rpm(td, fallback_pct=fallback_pct, bias=target_bias)
+        floor_rpm = td.engine_max_rpm * floor_pct
+        safe_redline = self._safe_downshift_redline(td)
+        ratios = self._calibrator.get_ratios(td.car_key)
+        best: tuple[int, float] | None = None
+        best_score = float("inf")
+
+        for gear in range(td.gear - 1, 0, -1):
+            projected = self._calibrator.project_rpm_after_shift(td, gear)
+            if projected is None and not ratios and gear == td.gear - 1:
+                projected = td.current_rpm * (td.gear / max(gear, 1))
+            if projected is None:
+                continue
+            if projected > safe_redline or projected <= td.current_rpm * 1.08:
+                continue
+            if not self._projected_power_is_better(td, projected):
+                continue
+
+            below_floor_penalty = max(0.0, floor_rpm - projected) * 1.5
+            score = abs(projected - target_rpm) + below_floor_penalty
+            if score < best_score:
+                best = (gear, projected)
+                best_score = score
+
+        return best
+
+    def _track_power_demand_downshift(
+        self,
+        td: Telemetry,
+        now: float,
+        *,
+        min_throttle: float,
+        fallback_pct: float,
+        target_bias: float,
+        floor_pct: float,
+        lock_ms: int,
+        state: str,
+        sub: str,
+        min_gear: int = 3,
+        min_speed_kmh: float = 30.0,
+        allow_skip: bool = True,
+        cascade_lock_s: float = 0.35,
+        upshift_lock_s: float = 0.70,
+        block_spin: bool = True,
+    ) -> bool:
+        if td.throttle < min_throttle or td.brake > 0.08:
+            return False
+        if td.gear < min_gear or td.speed_kmh < min_speed_kmh:
+            return False
+        if td.rpm_pct >= floor_pct:
+            return False
+        if block_spin and td.max_combined_slip > 2.4 and td.rpm_pct > 0.45:
+            return False
+
+        target = self._target_gear_for_power(
+            td,
+            fallback_pct=fallback_pct,
+            target_bias=target_bias,
+            floor_pct=floor_pct,
+        )
+        if target is None:
+            return False
+        target_gear, projected_rpm = target
+        if target_gear >= td.gear:
+            return False
+
+        if allow_skip and target_gear <= td.gear - 2 and td.gear >= 4:
+            if self._shift_down_double(
+                td,
+                lock_ms,
+                target_gear,
+                state=state,
+                cascade_lock_s=cascade_lock_s,
+            ):
+                self._no_upshift_until = now + upshift_lock_s
+                return True
+            return False
+
+        reason = f"{sub} →{target_gear} ({projected_rpm:.0f} rpm)"
+        if not self._shift_down(
+            td,
+            lock_ms,
+            state,
+            reason,
+            cascade_lock_s=cascade_lock_s,
+        ):
+            return False
+        self._no_upshift_until = now + upshift_lock_s
+        return True
+
+    def _landing_recovery_downshift(self, td: Telemetry, now: float, mode: Mode) -> bool:
+        if not self._airtime.landing_recovery(now):
+            return False
+        if td.gear <= 1 or td.speed_kmh < Cfg.MIN_SPEED_KMH:
+            return False
+
+        self._no_downshift_until = 0.0
+        if td.brake > 0.25:
+            return self._track_brake_down(
+                td,
+                now,
+                self._config.get("brake_thr", 35) / 100 * 0.7,
+                lock_ms=240,
+                track_brake=True,
+                cascade_lock_s=0.25,
+            )
+
+        if mode == Mode.RACE:
+            floor = self._power_floor_pct(
+                td,
+                fallback=0.58,
+                torque_offset=-0.02,
+                min_floor=0.52,
+                max_floor=0.72,
+            )
+            return self._track_power_demand_downshift(
+                td,
+                now,
+                min_throttle=0.34,
+                fallback_pct=0.70,
+                target_bias=0.45,
+                floor_pct=floor,
+                lock_ms=260,
+                state="LANDING DOWN",
+                sub="recovery",
+                min_gear=3,
+                min_speed_kmh=25.0,
+                allow_skip=True,
+                cascade_lock_s=0.28,
+                upshift_lock_s=0.65,
+            )
+
+        if mode == Mode.OFFROAD:
+            floor = self._power_floor_pct(
+                td,
+                fallback=self._config.get("offroad_down_rpm", 55) / 100,
+                torque_offset=-0.08,
+                min_floor=0.46,
+                max_floor=0.64,
+            )
+            return self._track_power_demand_downshift(
+                td,
+                now,
+                min_throttle=0.28,
+                fallback_pct=0.62,
+                target_bias=0.20,
+                floor_pct=floor,
+                lock_ms=300,
+                state="LANDING TORQUE",
+                sub="recovery",
+                min_gear=2,
+                min_speed_kmh=12.0,
+                allow_skip=True,
+                cascade_lock_s=0.35,
+                upshift_lock_s=0.85,
+                block_spin=False,
+            )
+
+        if mode == Mode.DRIFT:
+            floor = self._config.get("drift_down", 65) / 100
+            return self._track_power_demand_downshift(
+                td,
+                now,
+                min_throttle=0.20,
+                fallback_pct=max(0.62, floor),
+                target_bias=0.25,
+                floor_pct=floor,
+                lock_ms=280,
+                state="DRIFT HOLD",
+                sub="landing",
+                min_gear=2,
+                min_speed_kmh=25.0,
+                allow_skip=False,
+                cascade_lock_s=0.42,
+                upshift_lock_s=0.75,
+                block_spin=False,
+            )
+
+        return False
+
     def _track_upshift_in_band(
-        self, td: Telemetry, now: float, offset: float, min_throttle: float = 0.05
+        self,
+        td: Telemetry,
+        now: float,
+        offset: float,
+        min_throttle: float = 0.05,
+        *,
+        downshift_lock_s: float = 1.0,
     ) -> bool:
         if td.throttle < min_throttle:
             return False
@@ -927,7 +1268,7 @@ class TCULogic:
             target_pct, source = self._race_upshift_target_pct(td)
             if td.rpm_pct < target_pct:
                 return False
-            return self._shift_up(td, 300, "UPSHIFT", source)
+            return self._shift_up(td, 300, "UPSHIFT", source, downshift_lock_s=downshift_lock_s)
 
         performance_target = self._performance_upshift_target_pct(td, offset)
         if performance_target is not None:
@@ -935,7 +1276,7 @@ class TCULogic:
             target_pct = min(target_pct, self._upshift_ceiling_pct(td))
             if td.rpm_pct < target_pct:
                 return False
-            return self._shift_up(td, 300, "UPSHIFT", source)
+            return self._shift_up(td, 300, "UPSHIFT", source, downshift_lock_s=downshift_lock_s)
 
         fallback = self._mode_upshift_fallback_pct()
         mature_curve = self._power_curve.has_mature_data(td.car_key)
@@ -948,7 +1289,7 @@ class TCULogic:
         target_pct = min(target_pct, self._upshift_ceiling_pct(td))
         if td.rpm_pct < target_pct:
             return False
-        return self._shift_up(td, 300, "UPSHIFT", "in band")
+        return self._shift_up(td, 300, "UPSHIFT", "in band", downshift_lock_s=downshift_lock_s)
 
     def _race_upshift_target_pct(self, td: Telemetry) -> tuple[float, str]:
         if td.engine_max_rpm <= 0:
@@ -970,7 +1311,11 @@ class TCULogic:
             return self._config.get("offroad_up_wot", 90) / 100
         return self._config.get("race_up_wot", 98) / 100
 
-    def _performance_upshift_target_pct(self, td: Telemetry, offset: float) -> tuple[float, str] | None:
+    def _performance_upshift_target_pct(
+        self,
+        td: Telemetry,
+        offset: float,
+    ) -> tuple[float, str] | None:
         if not self._config.get("feat_power_curve"):
             return None
         if td.gear < 1 or td.gear >= 10 or td.engine_max_rpm <= 0:
@@ -1355,17 +1700,60 @@ class TCULogic:
             self._tcu_state_sub = "holding decisions"
             return
 
-        if self._track_brake_down(td, now, brake_thr, lock_ms=250):
+        if self._landing_recovery_downshift(td, now, Mode.RACE):
+            return
+
+        if self._track_brake_down(
+            td,
+            now,
+            brake_thr,
+            lock_ms=250,
+            track_brake=True,
+            cascade_lock_s=0.25,
+        ):
+            return
+
+        race_floor = self._power_floor_pct(
+            td,
+            fallback=0.60,
+            torque_offset=-0.02,
+            min_floor=0.52,
+            max_floor=0.72,
+        )
+        min_throttle = 0.50 if (now - self._last_hard_brake_time) < 2.0 else 0.66
+        if self._track_power_demand_downshift(
+            td,
+            now,
+            min_throttle=min_throttle,
+            fallback_pct=0.72,
+            target_bias=0.45,
+            floor_pct=race_floor,
+            lock_ms=300,
+            state="RACE POWER DOWN",
+            sub="power",
+            min_gear=3,
+            min_speed_kmh=35.0,
+            allow_skip=True,
+            cascade_lock_s=0.35,
+            upshift_lock_s=0.70,
+        ):
             return
 
         if self._wheelspin_upshift_now(td) and td.speed_kmh > 15.0:
-            self._shift_up(td, 400, "WHEELSPIN", "traction save")
+            self._shift_up(td, 400, "WHEELSPIN", "traction save", downshift_lock_s=0.55)
             return
 
-        if self._track_out_of_band_kickdown(td, now, climb_only=True):
+        if self._track_out_of_band_kickdown(
+            td,
+            now,
+            climb_only=True,
+            lock_ms=360,
+            cascade_lock_s=0.40,
+            upshift_lock_s=0.75,
+        ):
             return
 
-        if self._track_upshift_in_band(td, now, offset=0.03):
+        if self._track_upshift_in_band(td, now, offset=0.03, downshift_lock_s=0.55):
             return
 
         self._tcu_state = "RACE"
@@ -1484,18 +1872,43 @@ class TCULogic:
         self._tcu_state_sub = "adaptive" if adaptive else "relaxed"
 
     def _mode_drift(self, td: Telemetry, now: float):
+        if self._config.get("feat_airtime_lock") and self._airtime.is_airborne:
+            self._tcu_state = "AIRBORNE"
+            self._tcu_state_sub = "drift — hold"
+            return
+        if self._landing_recovery_downshift(td, now, Mode.DRIFT):
+            return
         if td.speed_kmh < 30.0:
             self._tcu_state = "DRIFT"
             self._tcu_state_sub = "low speed"
             return
         if td.rpm_pct < 0.20 and td.gear > 1:
-            self._shift_down(td, 350, "DRIFT HOLD", "save engine")
+            self._shift_down(td, 350, "DRIFT HOLD", "save engine", cascade_lock_s=0.42)
             return
         if td.rpm_pct < self._config.get("drift_down", 65) / 100 and td.gear > 1:
-            self._shift_down(td, 300, "DRIFT HOLD", "rpm low")
+            floor = self._config.get("drift_down", 65) / 100
+            if td.throttle > 0.20 and self._track_power_demand_downshift(
+                td,
+                now,
+                min_throttle=0.20,
+                fallback_pct=max(0.62, floor),
+                target_bias=0.25,
+                floor_pct=floor,
+                lock_ms=300,
+                state="DRIFT HOLD",
+                sub="rpm low",
+                min_gear=2,
+                min_speed_kmh=30.0,
+                allow_skip=False,
+                cascade_lock_s=0.42,
+                upshift_lock_s=0.75,
+                block_spin=False,
+            ):
+                return
+            self._shift_down(td, 300, "DRIFT HOLD", "rpm low", cascade_lock_s=0.42)
             return
         if td.rpm_pct >= self._config.get("drift_up", 92) / 100:
-            self._shift_up(td, 300, "DRIFT HOLD", "limiter")
+            self._shift_up(td, 300, "DRIFT HOLD", "limiter", downshift_lock_s=0.75)
             return
         self._tcu_state = "DRIFT HOLD"
         self._tcu_state_sub = "in power band"
@@ -1519,7 +1932,17 @@ class TCULogic:
             self._tcu_state_sub = "offroad — hold"
             return
 
-        if self._track_brake_down(td, now, brake_thr, lock_ms=300):
+        if self._landing_recovery_downshift(td, now, Mode.OFFROAD):
+            return
+
+        if self._track_brake_down(
+            td,
+            now,
+            brake_thr,
+            lock_ms=300,
+            track_brake=True,
+            cascade_lock_s=0.30,
+        ):
             return
 
         if (
@@ -1527,19 +1950,57 @@ class TCULogic:
             and td.speed_kmh > 15.0
             and not self._is_spinning_not_traction(td)
         ):
-            self._shift_up(td, 400, "WHEELSPIN", "lose grip")
+            self._shift_up(td, 400, "WHEELSPIN", "lose grip", downshift_lock_s=0.80)
             return
 
         down_rpm = self._config.get("offroad_down_rpm", 55) / 100
+        offroad_floor = self._power_floor_pct(
+            td,
+            fallback=down_rpm,
+            torque_offset=-0.08,
+            min_floor=0.46,
+            max_floor=0.64,
+        )
+        if self._track_power_demand_downshift(
+            td,
+            now,
+            min_throttle=0.38,
+            fallback_pct=0.62,
+            target_bias=0.20,
+            floor_pct=offroad_floor,
+            lock_ms=380,
+            state="TORQUE DOWN",
+            sub="torque",
+            min_gear=2,
+            min_speed_kmh=10.0,
+            allow_skip=True,
+            cascade_lock_s=0.42,
+            upshift_lock_s=0.95,
+            block_spin=False,
+        ):
+            return
+
         if thr >= 0.40 and td.rpm_pct < down_rpm and td.gear > 1 and td.speed_kmh > 8.0:
-            self._shift_down(td, 450, "TORQUE DOWN", "climbing")
+            self._shift_down(td, 450, "TORQUE DOWN", "climbing", cascade_lock_s=0.45)
             self._no_upshift_until = now + 1.5
             return
 
-        if self._track_out_of_band_kickdown(td, now):
+        if self._track_out_of_band_kickdown(
+            td,
+            now,
+            lock_ms=420,
+            cascade_lock_s=0.45,
+            upshift_lock_s=0.9,
+        ):
             return
 
-        if self._track_upshift_in_band(td, now, offset=0.07, min_throttle=0.20):
+        if self._track_upshift_in_band(
+            td,
+            now,
+            offset=0.07,
+            min_throttle=0.20,
+            downshift_lock_s=0.80,
+        ):
             return
 
         self._tcu_state = "OFFROAD"

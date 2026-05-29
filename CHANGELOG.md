@@ -1,5 +1,27 @@
 # Changelog
 
+## [13.2.0] - 2026-05-29
+
+### Added
+
+- **Race power-demand downshift** - Race mode now predicts a target gear from learned gear ratios, power curve data, and rev-limiter safety margins before downshifting under low-RPM/high-throttle load.
+- **Landing recovery window** - airtime detection now exposes a short landing recovery state so Race, Offroad, and Drift can regain the correct gear after jumps.
+- **Track brake downshift path** - Race and Offroad use a more responsive braking rule for sustained medium braking and deceleration, while keeping the existing comfort-oriented brake curve untouched.
+- **Performance regression tests** - added Python behavior tests for Race power down, track brake down, airtime landing recovery, Offroad torque down, and Drift single-step hold logic.
+
+### Changed
+
+- **Mode-specific shift locks** - Race, Offroad, and Drift now use shorter or more conservative post-shift lock windows depending on the mode instead of sharing the same 1-second downshift lock everywhere.
+- **Offroad torque strategy** - Offroad adopts the intelligent target-gear logic with lower torque-biased RPM targets and longer locks for rough terrain stability.
+- **Drift hold strategy** - Drift uses the new recovery and target-gear helpers only for single-step RPM recovery, avoiding Race-style skip-down behavior that could upset drift angle.
+- **Airtime detection** - airborne detection now combines suspension travel, vertical velocity, and wheel-slip voting to reduce missed jump/landing transitions.
+
+### Fixed
+
+- **Race low-RPM delay** - fixed cases where Race mode stayed in a tall gear after corner exit, landing, or high-gear full throttle because non-brake downshift logic was climb-only.
+- **Slow landing recovery** - landing now clears stale downshift/predictive locks and temporarily blocks upshifts so the controller can restore the power band faster.
+- **Over-aggressive per-car assumptions** - power-demand downshifts are skipped when mature learned power-curve data predicts the lower gear would make less power.
+
 ## [13.1.2] - 2026-05-28
 
 ### Added
@@ -67,6 +89,28 @@
 ---
 
 # 更新日志
+
+## [13.2.0] - 2026-05-29
+
+### 新增
+
+- **Race 动力需求降挡** - Race 模式现在会根据已学习的齿比、功率曲线和断油安全边界预测目标挡位，再决定低转大油门时是否降挡。
+- **落地恢复窗口** - 腾空检测新增短暂落地恢复状态，Race、Offroad、Drift 可在跳跃落地后更快回到合适挡位。
+- **赛道制动降挡路径** - Race 与 Offroad 对持续中等刹车和车速下降更敏感，同时不改变 Comfort 的平顺制动曲线。
+- **性能回归测试** - 新增 Python 行为测试，覆盖 Race 动力降挡、赛道制动降挡、腾空落地恢复、Offroad 扭矩降挡和 Drift 单步保转逻辑。
+
+### 变更
+
+- **按模式区分换挡锁定** - Race、Offroad、Drift 不再全部共用 1 秒降挡锁，而是按模式使用更短或更保守的锁定窗口。
+- **Offroad 扭矩策略** - Offroad 接入智能目标挡逻辑，但使用更偏扭矩、更低的目标转速和更长锁定，以适应粗糙路面。
+- **Drift 保转策略** - Drift 只使用新的恢复和目标挡 helper 做单步 RPM 恢复，避免 Race 式跳降破坏漂移姿态。
+- **腾空检测** - 空中判断现在结合悬挂行程、垂向速度和轮胎 slip 投票，减少跳跃/落地状态漏判。
+
+### 修复
+
+- **Race 低转迟滞** - 修复 Race 在出弯、落地或高挡全油门时，因为非制动降挡仅限爬坡而继续拖高挡的问题。
+- **落地恢复慢** - 落地时会清理旧的降挡/预测锁，并短暂禁止升挡，让控制器更快恢复动力带。
+- **避免错误套用单一车辆假设** - 如果成熟功率曲线预测降挡后功率更低，动力需求降挡会主动跳过。
 
 ## [13.1.1] — 2026-05-27
 
