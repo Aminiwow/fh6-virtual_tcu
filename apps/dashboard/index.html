@@ -407,13 +407,14 @@
         transform: translate(-50%, -50%);
       }
 
-      .chart {
+      .guide {
         display: flex;
-        min-height: 210px;
+        min-height: 290px;
         flex-direction: column;
+        gap: 12px;
       }
 
-      .chart-head {
+      .guide-head {
         display: flex;
         flex-wrap: wrap;
         align-items: center;
@@ -423,28 +424,124 @@
         padding-bottom: 9px;
       }
 
-      .legend {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 10px;
-        color: var(--muted);
-        font-size: 11px;
+      .guide-head > .label:not(#guideTitle),
+      .guide-head .legend,
+      .guide #chart {
+        display: none;
       }
 
-      .legend span::before {
-        content: "";
-        display: inline-block;
-        width: 8px;
-        height: 8px;
-        margin-right: 5px;
-        border-radius: 999px;
-        background: currentColor;
+      .guide-summary {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        gap: 8px;
       }
 
-      canvas {
+      .guide-metric {
+        min-width: 0;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        background: var(--panel-2);
+        padding: 8px 9px;
+      }
+
+      .guide-metric span {
+        display: block;
+        overflow: hidden;
+        color: var(--dim);
+        font-size: 10px;
+        font-weight: 800;
+        letter-spacing: 0.06em;
+        text-overflow: ellipsis;
+        text-transform: uppercase;
+        white-space: nowrap;
+      }
+
+      .guide-metric strong {
+        display: block;
+        overflow: hidden;
+        margin-top: 4px;
+        color: var(--text);
+        font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+        font-size: 14px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .curve-strip {
+        display: grid;
+        grid-auto-columns: minmax(4px, 1fr);
+        grid-auto-flow: column;
+        align-items: end;
+        gap: 3px;
+        height: 74px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        background: linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(0, 0, 0, 0.08));
+        padding: 10px 9px 8px;
+      }
+
+      .curve-point {
+        min-height: 3px;
+        border-radius: 3px 3px 1px 1px;
+        background: var(--blue);
+      }
+
+      .curve-point.peak {
+        background: var(--green);
+        box-shadow: 0 0 9px rgba(34, 197, 94, 0.55);
+      }
+
+      .guide-table-wrap {
+        overflow: auto;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+      }
+
+      .guide-table {
         width: 100%;
-        min-height: 160px;
-        flex: 1;
+        min-width: 760px;
+        border-collapse: collapse;
+        font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+        font-size: 12px;
+      }
+
+      .guide-table th,
+      .guide-table td {
+        padding: 8px 9px;
+        border-bottom: 1px solid var(--border);
+        text-align: right;
+        white-space: nowrap;
+      }
+
+      .guide-table th {
+        position: sticky;
+        top: 0;
+        z-index: 1;
+        color: var(--muted);
+        background: var(--panel);
+        font-size: 10px;
+        font-weight: 900;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+      }
+
+      .guide-table th:first-child,
+      .guide-table td:first-child {
+        text-align: left;
+      }
+
+      .guide-table tbody tr.active {
+        background: rgba(34, 197, 94, 0.10);
+      }
+
+      .guide-table tbody tr:last-child td {
+        border-bottom: 0;
+      }
+
+      .guide-note {
+        color: var(--dim);
+        font-size: 12px;
+        line-height: 1.35;
       }
 
       .stat-title {
@@ -491,6 +588,10 @@
 
         .metrics {
           grid-template-columns: 1fr;
+        }
+
+        .guide-summary {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
         }
 
         .rpm {
@@ -580,8 +681,8 @@
         </div>
 
         <div class="lower-grid">
-          <div class="card chart">
-            <div class="chart-head">
+          <div class="card guide">
+            <div class="guide-head">
               <div class="label">实时遥测曲线</div>
               <div class="legend">
                 <span style="color: var(--green)">RPM <strong id="legendRpm">0%</strong></span>
@@ -884,6 +985,219 @@
           line("speed", "#3b82f6");
         }
 
+        function ensureShiftGuideUi() {
+          if (byId("guideRows")) return;
+          var card = document.querySelector(".guide");
+          if (!card) return;
+          var head = card.querySelector(".guide-head") || card;
+
+          var title = document.createElement("div");
+          title.id = "guideTitle";
+          title.className = "label";
+          title.textContent = "学习后转速 / 速度攻略";
+          head.appendChild(title);
+
+          var status = document.createElement("span");
+          status.id = "guideStatus";
+          status.className = "pill yellow";
+          status.textContent = "学习中";
+          head.appendChild(status);
+
+          var summary = document.createElement("div");
+          summary.className = "guide-summary";
+          var metrics = [
+            ["峰值马力", "guidePeakHp", "--"],
+            ["峰值扭矩", "guidePeakTorque", "--"],
+            ["推荐换挡", "guideCurrentShift", "--"],
+            ["曲线样本", "guideSamples", "0"],
+            ["学习置信度", "guideConfidence", "0%"],
+          ];
+          for (var i = 0; i < metrics.length; i += 1) {
+            var metric = document.createElement("div");
+            metric.className = "guide-metric";
+            var label = document.createElement("span");
+            label.textContent = metrics[i][0];
+            var value = document.createElement("strong");
+            value.id = metrics[i][1];
+            value.textContent = metrics[i][2];
+            metric.appendChild(label);
+            metric.appendChild(value);
+            summary.appendChild(metric);
+          }
+          card.appendChild(summary);
+
+          var curve = document.createElement("div");
+          curve.id = "guideCurve";
+          curve.className = "curve-strip";
+          card.appendChild(curve);
+
+          var wrap = document.createElement("div");
+          wrap.className = "guide-table-wrap";
+          var table = document.createElement("table");
+          table.className = "guide-table";
+          var thead = document.createElement("thead");
+          var headerRow = document.createElement("tr");
+          var headers = ["挡位", "速度区间", "推荐升挡", "升挡速度", "落点转速", "齿比", "来源"];
+          for (var h = 0; h < headers.length; h += 1) {
+            var th = document.createElement("th");
+            th.textContent = headers[h];
+            headerRow.appendChild(th);
+          }
+          thead.appendChild(headerRow);
+          var tbody = document.createElement("tbody");
+          tbody.id = "guideRows";
+          table.appendChild(thead);
+          table.appendChild(tbody);
+          wrap.appendChild(table);
+          card.appendChild(wrap);
+
+          var note = document.createElement("div");
+          note.id = "guideNote";
+          note.className = "guide-note";
+          note.textContent = "每辆车或调校的齿比和动力曲线会单独保存。";
+          card.appendChild(note);
+        }
+
+        function guideDash(value) {
+          return value === null || value === undefined || value === "" ? "--" : value;
+        }
+
+        function guideRpm(value) {
+          return value === null || value === undefined ? "--" : round(value) + " rpm";
+        }
+
+        function guideSpeed(value) {
+          return value === null || value === undefined ? "--" : fixed(value, 1) + " km/h";
+        }
+
+        function guideSource(value) {
+          var map = {
+            "power cross": "动力交叉",
+            "falling power": "功率下滑",
+            "power ceiling": "功率上限",
+            "power peak": "峰值马力",
+            "top or learning": "学习中",
+          };
+          return map[value] || guideDash(value);
+        }
+
+        function renderGuideCurve(points, peakRpm) {
+          var root = byId("guideCurve");
+          if (!root) return;
+          root.innerHTML = "";
+          var curve = Array.isArray(points) ? points : [];
+          if (!curve.length) {
+            var empty = document.createElement("div");
+            empty.className = "guide-note";
+            empty.textContent = "等待全油门动力曲线样本";
+            root.appendChild(empty);
+            return;
+          }
+          var maxHp = 0;
+          for (var i = 0; i < curve.length; i += 1) maxHp = Math.max(maxHp, Number(curve[i].hp) || 0);
+          var step = Math.max(1, Math.ceil(curve.length / 42));
+          for (var j = 0; j < curve.length; j += step) {
+            var point = curve[j];
+            var hp = Number(point.hp) || 0;
+            var bar = document.createElement("div");
+            bar.className = "curve-point" + (round(point.rpm) === round(peakRpm) ? " peak" : "");
+            bar.style.height = Math.max(4, Math.round((hp / Math.max(maxHp, 1)) * 58)) + "px";
+            bar.title = round(point.rpm) + " rpm / " + round(hp) + " HP";
+            root.appendChild(bar);
+          }
+        }
+
+        function renderShiftGuide(t) {
+          ensureShiftGuideUi();
+          var guide = t.shift_guide || {};
+          var rows = Array.isArray(guide.gears) ? guide.gears : [];
+          var confidence = Math.round(clamp(guide.confidence || 0, 0, 1) * 100);
+          var status = byId("guideStatus");
+          if (status) {
+            status.className = "pill " + (guide.learned ? "green" : "yellow");
+            status.textContent = guide.learned ? "已学习" : guide.available ? "学习中" : "等待数据";
+          }
+
+          text(
+            "guidePeakHp",
+            guide.peak_hp && guide.peak_hp_rpm
+              ? round(guide.peak_hp) + " HP @ " + round(guide.peak_hp_rpm)
+              : "--",
+          );
+          text(
+            "guidePeakTorque",
+            guide.peak_torque_nm && guide.peak_torque_rpm
+              ? round(guide.peak_torque_nm) + " Nm @ " + round(guide.peak_torque_rpm)
+              : "--",
+          );
+          var currentGear = Number(t.gear);
+          var current = null;
+          for (var i = 0; i < rows.length; i += 1) {
+            if (Number(rows[i].gear) === currentGear) current = rows[i];
+          }
+          text(
+            "guideCurrentShift",
+            current && current.upshift_rpm && current.next_gear
+              ? "G" + current.gear + "→G" + current.next_gear + " @ " + round(current.upshift_rpm)
+              : "--",
+          );
+          text("guideSamples", round(guide.sample_count) + " / " + round(guide.bin_count) + " bins");
+          text("guideConfidence", confidence + "%");
+          renderGuideCurve(guide.curve, guide.peak_hp_rpm);
+
+          var body = byId("guideRows");
+          if (!body) return;
+          body.innerHTML = "";
+          if (!rows.length) {
+            var emptyRow = document.createElement("tr");
+            var emptyCell = document.createElement("td");
+            emptyCell.colSpan = 7;
+            emptyCell.textContent = "等待齿比和动力曲线数据";
+            emptyRow.appendChild(emptyCell);
+            body.appendChild(emptyRow);
+          } else {
+            for (var r = 0; r < rows.length; r += 1) {
+              var row = rows[r];
+              var tr = document.createElement("tr");
+              if (Number(row.gear) === currentGear) tr.className = "active";
+              var range =
+                row.speed_min_kmh !== null && row.speed_min_kmh !== undefined && row.speed_max_kmh !== null && row.speed_max_kmh !== undefined
+                  ? fixed(row.speed_min_kmh, 1) + "-" + fixed(row.speed_max_kmh, 1) + " km/h"
+                  : row.speed_min_kmh !== null && row.speed_min_kmh !== undefined
+                    ? fixed(row.speed_min_kmh, 1) + "+ km/h"
+                    : "--";
+              var cells = [
+                "G" + row.gear,
+                range,
+                row.upshift_rpm ? guideRpm(row.upshift_rpm) : "--",
+                guideSpeed(row.upshift_speed_kmh),
+                row.landing_rpm ? guideRpm(row.landing_rpm) : "--",
+                row.ratio ? Number(row.ratio).toFixed(4) : "--",
+                guideSource(row.source),
+              ];
+              for (var c = 0; c < cells.length; c += 1) {
+                var td = document.createElement("td");
+                td.textContent = cells[c];
+                tr.appendChild(td);
+              }
+              body.appendChild(tr);
+            }
+          }
+
+          var note = byId("guideNote");
+          if (note) {
+            if (!guide.available) {
+              note.textContent = "首次使用当前车辆/调校时，先直线平稳行驶学习齿比，再做 2/3 挡全油门拉转。";
+            } else if (!guide.learned) {
+              note.textContent =
+                "可以继续用赛道模式行驶；想让推荐转速更准，找干净路面做一次全油门拉转。";
+            } else {
+              note.textContent =
+                "推荐升挡点来自当前车辆/调校的动力曲线和齿比；换车或改调校后会重新学习。";
+            }
+          }
+        }
+
         function renderLearning(t) {
           var calibrated = !!t.calibrated;
           var pill = byId("calibrationPill");
@@ -1009,6 +1323,7 @@
           renderLearning(t);
           renderStats(t);
           renderDynamics(t);
+          renderShiftGuide(t);
           drawChart();
           renderHistory(state.history);
         }

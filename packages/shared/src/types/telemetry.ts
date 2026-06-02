@@ -33,6 +33,47 @@ export interface SessionStats {
   cars_driven: number
 }
 
+export interface ShiftGuideCurvePoint {
+  rpm: number
+  hp: number
+  torque_nm: number
+  samples: number
+}
+
+export interface ShiftGuideGearRow {
+  gear: number
+  ratio: number
+  samples: number
+  speed_min_kmh: number | null
+  speed_max_kmh: number | null
+  entry_rpm: number | null
+  upshift_rpm: number | null
+  upshift_rpm_pct: number | null
+  upshift_speed_kmh: number | null
+  next_gear: number | null
+  landing_rpm: number | null
+  power_hp: number | null
+  landing_power_hp: number | null
+  source: string
+}
+
+export interface ShiftGuide {
+  available: boolean
+  learned: boolean
+  confidence: number
+  sample_count: number
+  bin_count: number
+  rpm_min: number | null
+  rpm_max_seen: number | null
+  engine_max_rpm: number | null
+  peak_hp: number | null
+  peak_hp_rpm: number | null
+  peak_torque_nm: number | null
+  peak_torque_rpm: number | null
+  curve: ShiftGuideCurvePoint[]
+  gears: ShiftGuideGearRow[]
+}
+
 export interface TelemetrySnapshot {
   gear: number
   speed_kmh: number
@@ -77,4 +118,5 @@ export interface TelemetrySnapshot {
   optimal_shift_from_gear?: number | null
   optimal_shift_to_gear?: number | null
   optimal_shift_source?: string
+  shift_guide?: ShiftGuide
 }

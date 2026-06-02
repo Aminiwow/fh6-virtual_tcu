@@ -320,6 +320,22 @@ class PowerCurveDetector:
         high = [rpm for rpm, power, _torque in pts if power >= threshold]
         return float(max(high)) if high else None
 
+    def curve_points(self, car_key: tuple) -> list[dict]:
+        fit = self._fits.get(car_key)
+        if fit is None:
+            return []
+        points: list[dict] = []
+        for rpm, power_hp, torque_nm in fit.points():
+            points.append(
+                {
+                    "rpm": int(rpm),
+                    "hp": round(power_hp, 1),
+                    "torque_nm": round(torque_nm, 1),
+                    "samples": fit.bins.get(rpm, _PowerBin()).count,
+                }
+            )
+        return points
+
     def peak_torque_rpm(self, car_key: tuple) -> float | None:
         return self._peaks(car_key)[0]
 

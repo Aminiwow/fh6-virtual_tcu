@@ -356,8 +356,10 @@ class TCULogic:
                     "optimal_shift_from_gear": None,
                     "optimal_shift_to_gear": None,
                     "optimal_shift_source": "",
+                    "shift_guide": self._empty_shift_guide(),
                 }
             optimal_shift = self._optimal_shift_snapshot(td)
+            shift_guide = self._shift_guide_snapshot(td)
             return {
                 "gear": td.gear,
                 "speed_kmh": td.speed_kmh,
@@ -401,7 +403,164 @@ class TCULogic:
                 "peak_power_rpm_pct": self._power_curve.peak_power_rpm(td.car_key),
                 "peak_torque_rpm_pct": self._power_curve.peak_torque_rpm(td.car_key),
                 **optimal_shift,
+                "shift_guide": shift_guide,
             }
+
+    @staticmethod
+    def _empty_shift_guide() -> dict:
+        return {
+            "available": False,
+            "learned": False,
+            "confidence": 0.0,
+            "sample_count": 0,
+            "bin_count": 0,
+            "rpm_min": None,
+            "rpm_max_seen": None,
+            "engine_max_rpm": None,
+            "peak_hp": None,
+            "peak_hp_rpm": None,
+            "peak_torque_nm": None,
+            "peak_torque_rpm": None,
+            "curve": [],
+            "gears": [],
+        }
+
+    def _shift_guide_td(self, td: Telemetry, gear: int) -> Telemetry:
+        peak_rpm = self._power_curve.peak_power_abs_rpm(td.car_key)
+        current_rpm = peak_rpm if peak_rpm is not None else td.engine_max_rpm * 0.75
+        return Telemetry(
+            is_race_on=td.is_race_on,
+            engine_max_rpm=td.engine_max_rpm,
+            current_rpm=current_rpm,
+            gear=gear,
+            car_ordinal=td.car_ordinal,
+            car_class=td.car_class,
+            pi=td.pi,
+            idle_rpm=td.idle_rpm,
+            drivetrain=td.drivetrain,
+            accel_raw=255,
+            brake_raw=0,
+        )
+
+    def _guide_upshift_target(self, td: Telemetry, gear: int) -> dict | None:
+        ratios = self._calibrator.get_ratios(td.car_key)
+        if gear < 1 or gear >= 10 or gear not in ratios or gear + 1 not in ratios:
+            return None
+        if td.engine_max_rpm <= 0:
+            return None
+
+        guide_td = self._shift_guide_td(td, gear)
+        target = self._learned_power_upshift_target_pct(guide_td, offset=0.03)
+        if target is None:
+            return None
+
+        target_pct, source = target
+        target_pct = min(target_pct, self._upshift_ceiling_pct(guide_td))
+        upshift_rpm = target_pct * td.engine_max_rpm
+        upshift_speed = self._calibrator.speed_for_rpm(td.car_key, gear, upshift_rpm)
+        landing_rpm = upshift_rpm * ratios[gear + 1] / ratios[gear]
+        return {
+            "rpm": round(upshift_rpm),
+            "rpm_pct": round(target_pct, 4),
+            "speed_kmh": round(upshift_speed, 1) if upshift_speed is not None else None,
+            "source": source,
+            "landing_rpm": round(landing_rpm),
+            "power_hp": self._round_optional(
+                self._power_curve.power_at_rpm(td.car_key, upshift_rpm),
+                1,
+            ),
+            "landing_power_hp": self._round_optional(
+                self._power_curve.power_at_rpm(td.car_key, landing_rpm),
+                1,
+            ),
+        }
+
+    @staticmethod
+    def _round_optional(value: float | None, digits: int = 0) -> float | int | None:
+        if value is None:
+            return None
+        rounded = round(value, digits)
+        return int(rounded) if digits == 0 else rounded
+
+    def _shift_guide_snapshot(self, td: Telemetry) -> dict:
+        guide = self._empty_shift_guide()
+        if td.car_key[0] <= 0:
+            return guide
+
+        progress = self._power_curve.learning_progress(td.car_key)
+        curve = self._power_curve.curve_points(td.car_key)
+        ratios = self._calibrator.get_ratios(td.car_key)
+        counts = self._calibrator._counts.get(td.car_key, {})
+        gear_targets = {
+            gear: target
+            for gear in sorted(ratios)
+            if (target := self._guide_upshift_target(td, gear)) is not None
+        }
+
+        peak_hp_point = max(curve, key=lambda point: point["hp"], default=None)
+        peak_torque_point = max(curve, key=lambda point: point["torque_nm"], default=None)
+        max_rpm = td.engine_max_rpm if td.engine_max_rpm > 0 else progress.get("max_rpm")
+
+        gears = []
+        for gear in sorted(ratios):
+            if gear < 1 or gear > 10:
+                continue
+            target = gear_targets.get(gear)
+            min_speed = gear_targets.get(gear - 1, {}).get("speed_kmh") if gear > 1 else 0.0
+            max_speed = target.get("speed_kmh") if target else None
+            if max_speed is None and max_rpm:
+                ceiling_td = self._shift_guide_td(td, gear)
+                max_speed = self._calibrator.speed_for_rpm(
+                    td.car_key,
+                    gear,
+                    self._upshift_ceiling_pct(ceiling_td) * max_rpm,
+                )
+            entry_rpm = (
+                self._calibrator.project_rpm_at_speed(td.car_key, gear, min_speed)
+                if min_speed is not None
+                else None
+            )
+
+            gears.append(
+                {
+                    "gear": gear,
+                    "ratio": round(ratios[gear], 4),
+                    "samples": counts.get(gear, 0),
+                    "speed_min_kmh": round(min_speed, 1) if min_speed is not None else None,
+                    "speed_max_kmh": round(max_speed, 1) if max_speed is not None else None,
+                    "entry_rpm": round(entry_rpm) if entry_rpm is not None else None,
+                    "upshift_rpm": target.get("rpm") if target else None,
+                    "upshift_rpm_pct": target.get("rpm_pct") if target else None,
+                    "upshift_speed_kmh": target.get("speed_kmh") if target else None,
+                    "next_gear": gear + 1 if gear + 1 in ratios else None,
+                    "landing_rpm": target.get("landing_rpm") if target else None,
+                    "power_hp": target.get("power_hp") if target else None,
+                    "landing_power_hp": target.get("landing_power_hp") if target else None,
+                    "source": target.get("source") if target else "top or learning",
+                }
+            )
+
+        guide.update(
+            {
+                "available": bool(curve or ratios),
+                "learned": self._power_curve.has_mature_data(td.car_key)
+                and self._power_curve.has_power_lookup(td.car_key)
+                and len(ratios) >= 2,
+                "confidence": round(self._power_curve.confidence(td.car_key), 3),
+                "sample_count": int(progress.get("samples", 0)),
+                "bin_count": int(progress.get("points", 0)),
+                "rpm_min": progress.get("min_rpm"),
+                "rpm_max_seen": progress.get("max_rpm"),
+                "engine_max_rpm": round(max_rpm) if max_rpm else None,
+                "peak_hp": peak_hp_point["hp"] if peak_hp_point else None,
+                "peak_hp_rpm": peak_hp_point["rpm"] if peak_hp_point else None,
+                "peak_torque_nm": peak_torque_point["torque_nm"] if peak_torque_point else None,
+                "peak_torque_rpm": peak_torque_point["rpm"] if peak_torque_point else None,
+                "curve": curve,
+                "gears": gears,
+            }
+        )
+        return guide
 
     def snapshot_graph(self) -> list:
         with self._data_lock:
