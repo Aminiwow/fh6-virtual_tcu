@@ -1,5 +1,24 @@
 # Changelog
 
+## [13.4.0] - 2026-06-02
+
+### Added
+
+- **Guided Learn mode** - added a dedicated `LEARN` drive mode that keeps the TCU passive while guiding the user through clean gear-ratio and power-curve calibration pulls.
+- **Learning sample feedback** - Learn mode now explains why a sample is not accepted, including low throttle, wheelspin, airborne suspension, rough surface, shifting, clutch, or invalid power telemetry.
+- **Optimal shift RPM display** - when the current car/tune has a mature power curve and learned adjacent gear ratios, the dashboard and in-game HUD show the current gear-pair optimal upshift RPM.
+- **Gear-pair optimal shift tests** - added regression coverage proving that optimal shift RPM is calculated per gear pair instead of assuming one fixed RPM for every gear.
+
+### Changed
+
+- **Power-curve learning visibility** - exposed read-only learning progress and sample status from the power-curve learner so the UI can guide calibration instead of silently falling back.
+- **Mode UI support** - desktop settings, dashboard shared types, mode colors, and HUD mode display now recognize `LEARN`.
+
+### Fixed
+
+- **Dirty driving during learning** - wheelspin, jumps, slides, puddles, and rough surfaces now pause Learn mode with an instruction instead of being treated as tune changes.
+- **Full-repo lint cleanup** - fixed a long `gear_ratio.py` signature so the full `pnpm lint` pipeline passes cleanly.
+
 ## [13.3.0] - 2026-06-02
 
 ### Added
@@ -110,6 +129,25 @@
 ---
 
 # 更新日志
+
+## [13.4.0] - 2026-06-02
+
+### 新增
+
+- **引导式学习模式** - 新增专用 `LEARN` 驾驶模式，TCU 不自动换挡，只引导用户完成干净的齿比与功率曲线标定拉转。
+- **学习样本反馈** - 学习模式会说明样本为何未被接受，例如油门不足、打滑、腾空、路面太颠、正在换挡、离合未放开或功率遥测无效。
+- **最佳升挡转速显示** - 当当前车辆/调教已学到成熟功率曲线和相邻挡齿比后，网页仪表盘与游戏内 HUD 会显示当前挡位对的最佳升挡转速。
+- **挡位对最佳转速测试** - 新增回归测试，确认最佳升挡转速按挡位对计算，不假设所有挡都是同一个固定转速。
+
+### 变更
+
+- **功率曲线学习可视化** - 功率曲线学习器现在暴露只读学习进度和样本状态，UI 可引导标定，而不是静默回退默认策略。
+- **模式 UI 支持** - 桌面设置、Dashboard 共享类型、模式颜色和 HUD 模式显示均支持 `LEARN`。
+
+### 修复
+
+- **脏样本学习处理** - 打滑、腾空、漂移、积水和粗糙路面现在只会暂停学习并给出提示，不会被当成换了调教。
+- **全仓 lint 清理** - 修复 `gear_ratio.py` 的长函数签名，使完整 `pnpm lint` 流程干净通过。
 
 ## [13.3.0] - 2026-06-02
 

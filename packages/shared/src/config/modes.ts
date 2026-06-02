@@ -11,5 +11,6 @@ export const DRIVE_MODES: ModeDef[] = [
   { id: 'RACE', i18nKey: 'race' },
   { id: 'DRIFT', i18nKey: 'drift' },
   { id: 'OFFROAD', i18nKey: 'offroad' },
+  { id: 'LEARN', i18nKey: 'learn' },
   { id: 'MANUAL', i18nKey: 'manual' },
 ]

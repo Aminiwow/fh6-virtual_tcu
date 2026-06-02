@@ -24,6 +24,13 @@ export function useDashboardPanel(telemetry: Ref<TelemetrySnapshot | null>) {
   const subState = computed(() => t.value.tcu_state_sub || 'AWAITING TELEMETRY')
   const attitude = computed(() => t.value.attitude || 'NEUTRAL')
   const hint = computed(() => t.value.shift_hint || '')
+  const optimalShiftText = computed(() => {
+    const rpm = t.value.optimal_shift_rpm
+    const from = t.value.optimal_shift_from_gear
+    const to = t.value.optimal_shift_to_gear
+    if (!rpm || !from || !to) return ''
+    return `SHIFT ${from}→${to} @ ${Math.round(rpm)} RPM`
+  })
 
   const isAirborne = computed(() => t.value.airborne || false)
   const isYawLocked = computed(() => t.value.yaw_transient || false)
@@ -63,6 +70,7 @@ export function useDashboardPanel(telemetry: Ref<TelemetrySnapshot | null>) {
     subState,
     attitude,
     hint,
+    optimalShiftText,
     isAirborne,
     isYawLocked,
     gear,

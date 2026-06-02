@@ -62,6 +62,7 @@ export default {
     race: { name: 'Race', tag: 'track' },
     drift: { name: 'Drift', tag: 'slide' },
     offroad: { name: 'Offroad', tag: 'rally' },
+    learn: { name: 'Learn', tag: 'calibrate' },
     manual: { name: 'Manual', tag: 'off' },
   },
   calibration: {
@@ -83,8 +84,7 @@ export default {
     peakPower: 'Peak power',
     learning: 'learning…',
     rpmSuffix: '% RPM',
-    hint:
-      'Learned per car at high throttle. Race mode shifts just before the learned limiter and otherwise uses the fallback target.',
+    hint: 'Use Learn mode on a straight road for guided power-curve calibration. Race mode uses the learned power-cross target when ready.',
   },
   logger: {
     title: 'Replay Logger',

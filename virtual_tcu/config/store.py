@@ -5,8 +5,7 @@ from virtual_tcu import paths
 from virtual_tcu.config.constants import DEFAULTS
 from virtual_tcu.config.web_bind import valid_bind_host
 
-
-VALID_MODES = {"COMFORT", "DYNAMIC", "RACE", "DRIFT", "OFFROAD", "MANUAL"}
+VALID_MODES = {"COMFORT", "DYNAMIC", "RACE", "DRIFT", "OFFROAD", "LEARN", "MANUAL"}
 
 
 class ConfigStore:

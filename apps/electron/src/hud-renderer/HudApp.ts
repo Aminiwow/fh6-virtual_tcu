@@ -1,6 +1,6 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 
-type DriveMode = 'COMFORT' | 'DYNAMIC' | 'RACE' | 'DRIFT' | 'OFFROAD' | 'MANUAL'
+type DriveMode = 'COMFORT' | 'DYNAMIC' | 'RACE' | 'DRIFT' | 'OFFROAD' | 'LEARN' | 'MANUAL'
 
 interface TelemetrySnapshot {
   gear?: number
@@ -12,6 +12,9 @@ interface TelemetrySnapshot {
   brake?: number
   tcu_state?: string
   shift_hint?: string
+  optimal_shift_rpm?: number | null
+  optimal_shift_from_gear?: number | null
+  optimal_shift_to_gear?: number | null
 }
 
 export function useHudApp() {
@@ -39,6 +42,13 @@ export function useHudApp() {
   const rpmPct = computed(() => Math.max(0, Math.min(1, telemetry.value.rpm_pct ?? 0)))
   const tcuState = computed(() => telemetry.value.tcu_state ?? 'STANDBY')
   const hint = computed(() => telemetry.value.shift_hint ?? '')
+  const optimalShiftText = computed(() => {
+    const rpm = telemetry.value.optimal_shift_rpm
+    const from = telemetry.value.optimal_shift_from_gear
+    const to = telemetry.value.optimal_shift_to_gear
+    if (!rpm || !from || !to) return ''
+    return `OPT ${from}→${to} ${Math.round(rpm)} RPM`
+  })
 
   const modeColor = computed(() => {
     switch (mode.value) {
@@ -52,6 +62,8 @@ export function useHudApp() {
         return '#d97706'
       case 'OFFROAD':
         return '#ea580c'
+      case 'LEARN':
+        return '#14b8a6'
       case 'MANUAL':
         return '#64748b'
       default:
@@ -209,6 +221,7 @@ export function useHudApp() {
     rpmPct,
     tcuState,
     hint,
+    optimalShiftText,
     modeColor,
     rpmBarColor,
     gearColor,

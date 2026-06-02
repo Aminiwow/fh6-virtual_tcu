@@ -34,6 +34,7 @@
     subState,
     attitude,
     hint,
+    optimalShiftText,
     isAirborne,
     isYawLocked,
     gear,
@@ -132,10 +133,18 @@
                   class="absolute z-10 h-full w-0.5 bg-purple-500"
                   :style="{ left: `${t.peak_power_rpm_pct * 100}%` }"
                 ></div>
+                <div
+                  v-if="t.optimal_shift_rpm_pct"
+                  class="bg-accent-2 absolute z-20 h-full w-1"
+                  :style="{ left: `${t.optimal_shift_rpm_pct * 100}%` }"
+                ></div>
               </div>
-              <div class="mt-1 flex w-full justify-between px-1">
+              <div class="mt-1 grid w-full grid-cols-3 px-1">
                 <span class="text-[9px] text-blue-500">PEAK TQ</span>
-                <span class="text-[9px] text-purple-500">PEAK HP</span>
+                <span class="text-accent-2 text-center text-[9px]">
+                  {{ optimalShiftText || 'SHIFT --' }}
+                </span>
+                <span class="text-right text-[9px] text-purple-500">PEAK HP</span>
               </div>
             </div>
 

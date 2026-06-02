@@ -58,7 +58,9 @@ class TCULogic:
         except (ValueError, KeyError):
             self._mode = Mode.COMFORT
 
-        self._last_auto_mode = self._mode if self._mode != Mode.MANUAL else Mode.COMFORT
+        self._last_auto_mode = (
+            self._mode if self._mode not in (Mode.LEARN, Mode.MANUAL) else Mode.COMFORT
+        )
         self._last_processed_mode = self._mode
 
         self._lock_until = 0.0
@@ -267,7 +269,10 @@ class TCULogic:
         try:
             new_mode = Mode(str(mode_name).upper())
             with self._mode_lock:
-                if new_mode == Mode.MANUAL and self._mode != Mode.MANUAL:
+                if new_mode in (Mode.LEARN, Mode.MANUAL) and self._mode not in (
+                    Mode.LEARN,
+                    Mode.MANUAL,
+                ):
                     self._last_auto_mode = self._mode
                 self._mode = new_mode
             self._config.set("current_mode", new_mode.value)
@@ -278,7 +283,10 @@ class TCULogic:
         with self._mode_lock:
             idx = MODE_ORDER.index(self._mode)
             new_mode = MODE_ORDER[(idx + 1) % len(MODE_ORDER)]
-            if new_mode == Mode.MANUAL and self._mode != Mode.MANUAL:
+            if new_mode in (Mode.LEARN, Mode.MANUAL) and self._mode not in (
+                Mode.LEARN,
+                Mode.MANUAL,
+            ):
                 self._last_auto_mode = self._mode
             self._mode = new_mode
             new_value = self._mode.value
@@ -329,7 +337,13 @@ class TCULogic:
                     "peak_torque_rpm_pct": None,
                     "power_curve_available": False,
                     "power_curve_confidence": 0.0,
+                    "optimal_shift_rpm": None,
+                    "optimal_shift_rpm_pct": None,
+                    "optimal_shift_from_gear": None,
+                    "optimal_shift_to_gear": None,
+                    "optimal_shift_source": "",
                 }
+            optimal_shift = self._optimal_shift_snapshot(td)
             return {
                 "gear": td.gear,
                 "speed_kmh": td.speed_kmh,
@@ -370,6 +384,7 @@ class TCULogic:
                 "yaw_transient": self._yaw_transient.is_blocking,
                 "peak_power_rpm_pct": self._power_curve.peak_power_rpm(td.car_key),
                 "peak_torque_rpm_pct": self._power_curve.peak_torque_rpm(td.car_key),
+                **optimal_shift,
             }
 
     def snapshot_graph(self) -> list:
@@ -566,6 +581,10 @@ class TCULogic:
             self._tcu_state_sub = "TCU off"
             if self._config.get("feat_shift_advisor"):
                 self._compute_shift_advisor(td)
+            return
+
+        if self.mode == Mode.LEARN:
+            self._mode_learn(td, now)
             return
 
         self._shift_hint = ""
@@ -1456,6 +1475,15 @@ class TCULogic:
             return None
         if td.throttle < 0.55:
             return None
+        return self._power_cross_upshift_target_pct(td, offset)
+
+    def _power_cross_upshift_target_pct(
+        self,
+        td: Telemetry,
+        offset: float,
+    ) -> tuple[float, str] | None:
+        if td.gear < 1 or td.gear >= 10 or td.engine_max_rpm <= 0:
+            return None
         current_ratio = self._calibrator.ratio_for_gear(td.car_key, td.gear)
         next_ratio = self._calibrator.ratio_for_gear(td.car_key, td.gear + 1)
         if not current_ratio or not next_ratio:
@@ -1517,6 +1545,33 @@ class TCULogic:
         # No power crossing before the usable ceiling: hold the gear for max
         # acceleration, then let the ceiling guard force the shift.
         return search_end, "power ceiling"
+
+    def _optimal_shift_snapshot(self, td: Telemetry) -> dict:
+        empty = {
+            "optimal_shift_rpm": None,
+            "optimal_shift_rpm_pct": None,
+            "optimal_shift_from_gear": None,
+            "optimal_shift_to_gear": None,
+            "optimal_shift_source": "",
+        }
+        if not self._config.get("feat_power_curve"):
+            return empty
+        if not self._power_curve.has_mature_data(td.car_key):
+            return empty
+        target = self._power_cross_upshift_target_pct(td, offset=0.03)
+        if target is None:
+            return empty
+
+        target_pct, source = target
+        target_pct = min(target_pct, self._upshift_ceiling_pct(td))
+        target_rpm = target_pct * td.engine_max_rpm
+        return {
+            "optimal_shift_rpm": round(target_rpm),
+            "optimal_shift_rpm_pct": target_pct,
+            "optimal_shift_from_gear": td.gear,
+            "optimal_shift_to_gear": td.gear + 1,
+            "optimal_shift_source": source,
+        }
 
     def _upshift_ceiling_pct(self, td: Telemetry) -> float:
         learned = self._rev_limiter.effective_redline(td)
@@ -1654,6 +1709,76 @@ class TCULogic:
             self._shift_hint = f"↓ DOWN to {td.gear - 1} (brake)"
         else:
             self._shift_hint = ""
+
+    def _learn_progress_label(self, progress: dict) -> str:
+        confidence = int(round(float(progress.get("confidence", 0.0)) * 100))
+        samples = int(progress.get("samples", 0))
+        points = int(progress.get("points", 0))
+        return f"{confidence}% / {samples} samples / {points} bins"
+
+    def _gear_learning_hint(self, td: Telemetry) -> str:
+        if td.gear < 1:
+            return "select 2nd or 3rd gear"
+        if td.speed_kmh < GearRatioCalibrator.MIN_SPEED_KMH:
+            return "drive above 25 km/h in 2nd-4th"
+        if td.is_shifting:
+            return "wait for shift to settle"
+        if td.clutch_raw > 5:
+            return "release clutch"
+        if td.max_combined_slip > GearRatioCalibrator.MAX_CLEAN_SLIP:
+            return "reduce wheelspin for ratio learning"
+        if td.min_suspension_norm <= GearRatioCalibrator.MIN_SUSPENSION_NORM:
+            return "stay grounded for ratio learning"
+        if td.any_puddle or td.max_surface_rumble > GearRatioCalibrator.MAX_SURFACE_RUMBLE:
+            return "use smoother dry pavement"
+        return "hold steady throttle in each gear"
+
+    def _mode_learn(self, td: Telemetry, now: float):
+        del now
+        self._shift_hint = ""
+        progress = self._power_curve.learning_progress(td.car_key)
+        progress_label = self._learn_progress_label(progress)
+        ratios_ready = self._calibrator.has_data(td.car_key)
+        curve_ready = self._power_curve.has_mature_data(td.car_key)
+        lookup_ready = self._power_curve.has_power_lookup(td.car_key)
+
+        if ratios_ready and curve_ready and lookup_ready:
+            self._tcu_state = "LEARN DONE"
+            self._tcu_state_sub = f"curve ready ({progress_label}); switch to Race"
+            self._shift_hint = "Learning complete - switch to Race"
+            return
+
+        if not ratios_ready:
+            self._tcu_state = "LEARN GEARS"
+            self._tcu_state_sub = self._gear_learning_hint(td)
+            self._shift_hint = "First: drive straight in 2nd, 3rd, 4th briefly"
+            return
+
+        clean, reason = self._power_curve.sample_status(td)
+        if not clean:
+            ready = reason.startswith("hold throttle") or reason in {
+                "select 2nd or 3rd gear",
+                "raise RPM above idle",
+            }
+            self._tcu_state = "LEARN READY" if ready else "LEARN PAUSED"
+            self._tcu_state_sub = f"{reason}; {progress_label}"
+            self._shift_hint = "Straight dry road: 2nd/3rd gear, full throttle to near redline"
+            return
+
+        max_seen = progress.get("max_rpm")
+        if isinstance(max_seen, (int, float)) and td.engine_max_rpm > 0:
+            top_seen = max_seen / td.engine_max_rpm
+        else:
+            top_seen = 0.0
+
+        self._tcu_state = "LEARNING"
+        if top_seen < 0.82:
+            self._tcu_state_sub = f"clean sample; keep WOT higher ({progress_label})"
+        else:
+            self._tcu_state_sub = f"clean pull; repeat once if needed ({progress_label})"
+        self._shift_hint = (
+            "Hold full throttle; manually shift before limiter, then repeat next gear"
+        )
 
     def _launch_control(self, td: Telemetry, now: float) -> bool:
         is_stationary = td.speed_effective_ms < 3.0

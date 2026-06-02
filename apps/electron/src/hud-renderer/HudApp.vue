@@ -11,6 +11,7 @@
     rpmPct,
     tcuState,
     hint,
+    optimalShiftText,
     modeColor,
     rpmBarColor,
     gearStyle,
@@ -59,6 +60,7 @@
         <div class="rpm-bar">
           <div class="rpm-fill" :style="{ width: `${rpmPct * 100}%`, background: rpmBarColor }" />
         </div>
+        <div v-if="optimalShiftText" class="shift-target">{{ optimalShiftText }}</div>
         <div class="speed">
           <span class="speed-num">{{ speed }}</span>
           <span class="speed-unit">km/h</span>
@@ -115,6 +117,7 @@
   .hud-root.click-through .rpm-unit,
   .hud-root.click-through .speed-num,
   .hud-root.click-through .speed-unit,
+  .hud-root.click-through .shift-target,
   .hud-root.click-through .hint {
     text-shadow: var(--ct-outline-soft);
   }
@@ -300,6 +303,14 @@
       width 75ms linear,
       background 150ms linear,
       box-shadow 150ms linear;
+  }
+  .shift-target {
+    color: #0f766e;
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.04em;
+    line-height: 1.1;
+    white-space: nowrap;
   }
   .speed {
     display: flex;

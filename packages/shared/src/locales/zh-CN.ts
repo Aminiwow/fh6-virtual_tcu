@@ -60,6 +60,7 @@ export default {
     race: { name: '赛道', tag: '竞技' },
     drift: { name: '漂移', tag: '甩尾' },
     offroad: { name: '越野', tag: '拉力' },
+    learn: { name: '学习', tag: '标定' },
     manual: { name: '手动', tag: '关闭' },
   },
   calibration: {
@@ -81,7 +82,7 @@ export default {
     peakPower: '峰值功率转速',
     learning: '学习中…',
     rpmSuffix: '% 转速',
-    hint: '大油门下按车学习。赛道模式会在已学习的真实断油前升档，未学到时使用回退目标。',
+    hint: '在学习模式下找直路按提示拉转，可标定功率曲线。学好后赛道模式会使用功率交叉点升档。',
   },
   logger: {
     title: '回放日志',
@@ -160,7 +161,8 @@ export default {
     reset: '恢复默认',
     resetConfirm: '确定将所有设置恢复为默认值？',
     autosave: '自动保存至 tcu_config.json',
-    raceFallbackHint: '真实断油仍在学习时的探索目标；学到后赛道模式会按每辆车的真实上限提前一点升档。',
+    raceFallbackHint:
+      '真实断油仍在学习时的探索目标；学到后赛道模式会按每辆车的真实上限提前一点升档。',
     watchdog: '引擎似乎卡住 — 遥测未在处理',
     corneringLock: '弯道锁定',
     launchControlFeat: '弹射控制',

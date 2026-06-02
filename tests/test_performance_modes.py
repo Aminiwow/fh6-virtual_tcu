@@ -131,6 +131,7 @@ def test_race_upshift_uses_power_cross_before_limiter(tmp_path):
     car_key = (1, 5, 900)
     tcu._current_car_key = car_key
     seed_ratios(tcu, car_key)
+    tcu._power_curve.has_mature_data = lambda _car_key: True
     tcu._power_curve.has_power_lookup = lambda _car_key: True
     tcu._power_curve.peak_power_abs_rpm = lambda _car_key: 5700.0
     tcu._power_curve.max_high_power_rpm = lambda _car_key, min_peak_ratio=0.80: 7600.0
@@ -166,6 +167,97 @@ def test_race_upshift_leads_fast_rpm_rise(tmp_path):
     assert output.up == 1
     assert tcu._tcu_state == "UPSHIFT"
     assert "lead" in tcu._tcu_state_sub
+
+
+def test_optimal_shift_snapshot_is_gear_pair_specific(tmp_path):
+    tcu, _output = make_tcu(tmp_path, "RACE")
+    car_key = (1, 5, 900)
+    tcu._current_car_key = car_key
+    seed_ratios(tcu, car_key)
+    tcu._power_curve.has_mature_data = lambda _car_key: True
+    tcu._power_curve.has_power_lookup = lambda _car_key: True
+    tcu._power_curve.peak_power_abs_rpm = lambda _car_key: 6000.0
+    tcu._power_curve.max_high_power_rpm = lambda _car_key, min_peak_ratio=0.80: 7800.0
+
+    def power_at_rpm(_car_key, rpm):
+        if rpm < 6000.0:
+            return 250.0 + (rpm - 3000.0) * 0.05
+        return max(250.0, 400.0 - (rpm - 6000.0) * 0.045)
+
+    tcu._power_curve.power_at_rpm = power_at_rpm
+    tcu._power_curve.power_slope_at_rpm = lambda _car_key, _rpm: -0.045
+
+    second = tcu._optimal_shift_snapshot(telemetry(current_rpm=5000.0, gear=2))
+    fifth = tcu._optimal_shift_snapshot(telemetry(current_rpm=5000.0, gear=5))
+
+    assert second["optimal_shift_from_gear"] == 2
+    assert second["optimal_shift_to_gear"] == 3
+    assert fifth["optimal_shift_from_gear"] == 5
+    assert fifth["optimal_shift_to_gear"] == 6
+    assert second["optimal_shift_rpm"] != fifth["optimal_shift_rpm"]
+
+
+def test_learn_mode_guides_without_auto_shifting(tmp_path):
+    tcu, output = make_tcu(tmp_path, "LEARN")
+    car_key = (1, 5, 900)
+    tcu._current_car_key = car_key
+    seed_ratios(tcu, car_key)
+
+    tcu.process(telemetry(current_rpm=7700.0, gear=5, accel_raw=255))
+
+    assert output.up == 0
+    assert output.down == 0
+    assert tcu._tcu_state == "LEARNING"
+    assert "Hold full throttle" in tcu._shift_hint
+
+
+def test_learn_mode_rejects_spin_without_changing_tune(tmp_path):
+    tcu, output = make_tcu(tmp_path, "LEARN")
+    car_key = (1, 5, 900)
+    tcu._current_car_key = car_key
+    seed_ratios(tcu, car_key)
+
+    tcu.process(
+        telemetry(
+            current_rpm=5200.0,
+            gear=3,
+            accel_raw=255,
+            slip_fl=2.2,
+            slip_fr=2.2,
+            slip_rl=2.2,
+            slip_rr=2.2,
+        )
+    )
+
+    assert output.up == 0
+    assert output.down == 0
+    assert tcu._current_car_key == car_key
+    assert tcu._tcu_state == "LEARN PAUSED"
+    assert "reduce wheelspin" in tcu._tcu_state_sub
+
+
+def test_learn_mode_announces_done_when_curve_and_ratios_are_ready(tmp_path):
+    tcu, output = make_tcu(tmp_path, "LEARN")
+    car_key = (1, 5, 900)
+    tcu._current_car_key = car_key
+    seed_ratios(tcu, car_key)
+    tcu._power_curve.has_mature_data = lambda _car_key: True
+    tcu._power_curve.has_power_lookup = lambda _car_key: True
+    tcu._power_curve.learning_progress = lambda _car_key: {
+        "samples": 128,
+        "points": 32,
+        "confidence": 0.72,
+        "rpm_spread": 0.44,
+        "min_rpm": 2600,
+        "max_rpm": 7600,
+    }
+
+    tcu.process(telemetry(current_rpm=4200.0, gear=3, accel_raw=80))
+
+    assert output.up == 0
+    assert output.down == 0
+    assert tcu._tcu_state == "LEARN DONE"
+    assert "switch to Race" in tcu._tcu_state_sub
 
 
 def test_race_track_brake_accepts_sustained_medium_brake(tmp_path):

@@ -4,7 +4,6 @@ from bisect import bisect_left
 
 from virtual_tcu.telemetry.model import Telemetry
 
-
 W_PER_HP = 745.699872
 NM_RPM_PER_HP = 7127.0
 
@@ -53,7 +52,7 @@ class _PowerBin:
         }
 
     @classmethod
-    def from_dict(cls, data: dict) -> "_PowerBin":
+    def from_dict(cls, data: dict) -> _PowerBin:
         bin_ = cls()
         bin_.count = int(data.get("count", 0))
         power = data.get("power_samples", [])
@@ -130,7 +129,7 @@ class _PowerCurveFit:
         }
 
     @classmethod
-    def from_dict(cls, data: dict) -> "_PowerCurveFit":
+    def from_dict(cls, data: dict) -> _PowerCurveFit:
         fit = cls()
         fit.max_rpm = float(data.get("max_rpm", 0.0))
         fit.best_power_hp = float(data.get("best_power_hp", 0.0))
@@ -178,27 +177,64 @@ class PowerCurveDetector:
             return td.torque_nm * td.current_rpm / NM_RPM_PER_HP
         return 0.0
 
+    def sample_status(self, td: Telemetry) -> tuple[bool, str]:
+        if td.car_key[0] <= 0 or td.engine_max_rpm <= 0:
+            return False, "waiting for valid car telemetry"
+        if td.gear < 1:
+            return False, "select 2nd or 3rd gear"
+        if td.is_shifting:
+            return False, "wait for the shift to finish"
+        if td.throttle < self.MIN_THROTTLE:
+            return False, f"hold throttle above {self.MIN_THROTTLE * 100:.0f}%"
+        if td.torque_nm <= 0:
+            return False, "wait for positive engine torque"
+        if td.clutch_raw > 5:
+            return False, "release the clutch"
+        if td.current_rpm < 500:
+            return False, "raise RPM above idle"
+        if td.current_rpm > td.engine_max_rpm * 1.02:
+            return False, "lift after limiter contact"
+        if td.min_suspension_norm <= self.MIN_CLEAN_SUSPENSION:
+            return False, "stay fully grounded"
+        if td.any_puddle:
+            return False, "avoid puddles"
+        if td.max_surface_rumble > self.MAX_SURFACE_RUMBLE:
+            return False, "use smoother pavement"
+        if td.max_combined_slip > self.MAX_LEARN_SLIP:
+            return False, "reduce wheelspin"
+        if self._power_hp(td) <= 1.0:
+            return False, "waiting for power telemetry"
+        return True, "clean power sample"
+
+    def learning_progress(self, car_key: tuple) -> dict:
+        fit = self._fits.get(car_key)
+        if fit is None:
+            return {
+                "samples": 0,
+                "points": 0,
+                "confidence": 0.0,
+                "rpm_spread": 0.0,
+                "min_rpm": None,
+                "max_rpm": None,
+            }
+
+        pts = fit.points()
+        return {
+            "samples": fit.total_samples,
+            "points": len(pts),
+            "confidence": self.confidence(car_key),
+            "rpm_spread": fit.rpm_spread,
+            "min_rpm": pts[0][0] if pts else None,
+            "max_rpm": pts[-1][0] if pts else None,
+        }
+
     def observe(self, td: Telemetry):
         ck = td.car_key
-        if ck[0] <= 0 or td.gear < 1:
-            return
-        if td.throttle < self.MIN_THROTTLE or td.torque_nm <= 0 or td.is_shifting:
-            return
-        if td.clutch_raw > 5:
-            return
-        if td.current_rpm < 500 or td.current_rpm > td.engine_max_rpm * 1.02:
-            return
-        if (
-            td.min_suspension_norm <= self.MIN_CLEAN_SUSPENSION
-            or td.any_puddle
-            or td.max_surface_rumble > self.MAX_SURFACE_RUMBLE
-            or td.max_combined_slip > self.MAX_LEARN_SLIP
-        ):
+        clean, _reason = self.sample_status(td)
+        if not clean:
             return
 
         power_hp = self._power_hp(td)
-        if power_hp <= 1.0:
-            return
         self._fits.setdefault(ck, _PowerCurveFit()).add(
             td.current_rpm,
             td.engine_max_rpm,
@@ -220,7 +256,11 @@ class PowerCurveDetector:
 
         n_conf = max(
             0.0,
-            min(1.0, (fit.total_samples - self.MIN_SAMPLES) / (self.FULL_CONF_SAMPLES - self.MIN_SAMPLES)),
+            min(
+                1.0,
+                (fit.total_samples - self.MIN_SAMPLES)
+                / (self.FULL_CONF_SAMPLES - self.MIN_SAMPLES),
+            ),
         )
         s_conf = max(
             0.0,
@@ -257,7 +297,9 @@ class PowerCurveDetector:
         t = (rpm - left_rpm) / (right_rpm - left_rpm)
         return left_power + (right_power - left_power) * t
 
-    def power_slope_at_rpm(self, car_key: tuple, rpm: float, step_rpm: float = 200.0) -> float | None:
+    def power_slope_at_rpm(
+        self, car_key: tuple, rpm: float, step_rpm: float = 200.0
+    ) -> float | None:
         low = self.power_at_rpm(car_key, rpm - step_rpm)
         high = self.power_at_rpm(car_key, rpm + step_rpm)
         if low is None or high is None:

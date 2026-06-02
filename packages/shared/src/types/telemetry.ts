@@ -70,4 +70,9 @@ export interface TelemetrySnapshot {
   power_curve_available?: boolean
   power_curve_learned?: boolean
   power_curve_confidence?: number
+  optimal_shift_rpm?: number | null
+  optimal_shift_rpm_pct?: number | null
+  optimal_shift_from_gear?: number | null
+  optimal_shift_to_gear?: number | null
+  optimal_shift_source?: string
 }

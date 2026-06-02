@@ -153,7 +153,9 @@ class GearRatioCalibrator:
             driven_rad_s = td.speed_effective_ms / radius
         return self._wheel_speed_to_rpm(driven_rad_s, target_ratio)
 
-    def project_rpm_at_speed(self, car_key: tuple, target_gear: int, speed_kmh: float) -> float | None:
+    def project_rpm_at_speed(
+        self, car_key: tuple, target_gear: int, speed_kmh: float
+    ) -> float | None:
         car_ratios = self.get_ratios(car_key)
         radius = self._wheel_radius.get(car_key)
         if not car_ratios or not radius:
