@@ -1,5 +1,18 @@
 # Changelog
 
+## [13.4.1] - 2026-06-02
+
+### Changed
+
+- **Power-target fallback** - Race, Offroad, and Drift now fall back to a learned `peak power + offset` target when the gear-pair power-cross lookup is temporarily unavailable, instead of immediately falling back to the learned limiter.
+- **Optimal shift display stability** - the dashboard and in-game HUD can keep showing a learned optimal shift RPM from the mature power curve even when the exact gear-pair crossing cannot be calculated for the current frame.
+
+### Fixed
+
+- **False low limiter learning** - fixed high-gear positive-power RPM plateaus being misclassified as fuel cut, which could drag a real 8000 RPM limiter down to around 6800 RPM.
+- **6900 RPM shift regression** - Race mode no longer ignores the learned power band and repeatedly shifts near the wrongly learned limiter when the power curve says an earlier shift is faster.
+- **Log-derived regression coverage** - added tests for the user's 2026-06-01 log pattern: positive-power 6800 RPM plateaus, power-peak fallback execution, and optimal shift snapshot fallback.
+
 ## [13.4.0] - 2026-06-02
 
 ### Added
@@ -129,6 +142,19 @@
 ---
 
 # 更新日志
+
+## [13.4.1] - 2026-06-02
+
+### 变更
+
+- **功率目标回退** - Race、Offroad、Drift 在当前帧暂时算不出挡位对功率交叉点时，现在会回退到已学习的 `峰值功率 + 偏移量` 目标，而不是立刻回退到已学习断油点。
+- **最佳换挡显示稳定性** - 当功率曲线已经成熟，但当前帧无法精确计算挡位对交叉点时，网页仪表盘和游戏内 HUD 仍可显示来自成熟功率曲线的最佳升挡转速。
+
+### 修复
+
+- **低断油误学习** - 修复高挡正功率 RPM 平台被误判为断油的问题，避免把真实约 8000 RPM 的断油点错误拉低到 6800 RPM 附近。
+- **6900 转升挡回归** - Race 模式不再在功率曲线已经说明更早升挡更快时，仍反复按错误学习到的 limiter 在 6900 RPM 附近升挡。
+- **日志回归测试** - 新增针对用户 2026-06-01 日志形态的测试：6800 RPM 正功率平台、功率峰值回退执行，以及最佳换挡 snapshot 回退显示。
 
 ## [13.4.0] - 2026-06-02
 

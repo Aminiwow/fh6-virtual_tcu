@@ -27,6 +27,9 @@ class RevLimiterDetector:
     POWER_DROP_RATIO = 0.78
     POWER_DROP_FRAMES = 3
     MAX_RPM_GROWTH = 90.0
+    NOMINAL_BOUNCE_PCT = 0.94
+    CUT_POWER_HP = 5.0
+    LOWER_TRUSTED_SOURCES = {"hard_cut", "soft_cliff", "cut_bounce"}
 
     def __init__(self):
         self._redline: dict[tuple, float] = {}
@@ -59,6 +62,18 @@ class RevLimiterDetector:
         if td.torque_nm > 0 and td.current_rpm > 0:
             return td.torque_nm * td.current_rpm / 7127.0
         return 0.0
+
+    def _cut_like_power(self, car: tuple, td: Telemetry) -> bool:
+        has_raw_power = abs(td.power_w) > 1.0
+        raw_power_hp = td.power_w / W_PER_HP if has_raw_power else None
+        if has_raw_power and raw_power_hp is not None and raw_power_hp <= self.CUT_POWER_HP:
+            return True
+        if td.torque_nm <= 0:
+            return True
+
+        power_hp = self._power_hp(td)
+        current_peak = self._high_power_peak.get(car, 0.0)
+        return current_peak >= 50.0 and power_hp <= current_peak * self.POWER_DROP_RATIO
 
     def observe(self, td: Telemetry, last_downshift_time: float, now: float):
         car = td.car_key
@@ -106,14 +121,19 @@ class RevLimiterDetector:
         # Once high-rpm power has been observed, a sharp full-throttle drop is
         # usually fuel cut. FH6 often reports negative torque while the engine
         # bounces below nominal max RPM, so learn from the first clean drop.
-        hard_cut = has_raw_power and raw_power_hp is not None and raw_power_hp <= 5.0
+        hard_cut = has_raw_power and raw_power_hp is not None and raw_power_hp <= self.CUT_POWER_HP
         soft_cliff = current_peak >= 50.0 and power_hp <= current_peak * self.POWER_DROP_RATIO
         if current_peak >= 50.0 and (hard_cut or soft_cliff):
             streak = self._drop_streak.get(car, 0) + 1
             self._drop_streak[car] = streak
             needed = 1 if hard_cut else self.POWER_DROP_FRAMES
             if streak >= needed:
-                self._learn(car, max(td.current_rpm, self._high_rpm_seen.get(car, 0.0)))
+                source = "hard_cut" if hard_cut else "soft_cliff"
+                self._learn(
+                    car,
+                    max(td.current_rpm, self._high_rpm_seen.get(car, 0.0)),
+                    source=source,
+                )
         else:
             self._drop_streak.pop(car, None)
 
@@ -125,10 +145,12 @@ class RevLimiterDetector:
 
         wmax, wmin = max(win), min(win)
         rpm_growth = win[-1] - win[0]
+        cut_like = self._cut_like_power(car, td)
         if (
             wmax < td.engine_max_rpm * self.MIN_PEAK_PCT
             or (wmax - wmin) < self.MIN_OSCILLATION
             or abs(rpm_growth) > self.MAX_RPM_GROWTH
+            or (not cut_like and wmax < td.engine_max_rpm * self.NOMINAL_BOUNCE_PCT)
         ):
             self._peak_hold.pop(car, None)
             return
@@ -142,9 +164,10 @@ class RevLimiterDetector:
         self._peak_hold[car] = (held_peak, held_frames)
 
         if held_frames >= self.STABLE_FRAMES:
-            self._learn(car, held_peak)
+            source = "cut_bounce" if cut_like else "bounce"
+            self._learn(car, held_peak, source=source)
 
-    def _learn(self, car: tuple, redline: float):
+    def _learn(self, car: tuple, redline: float, *, source: str = "unknown"):
         if redline <= 0:
             return
         current = self._redline.get(car)
@@ -158,6 +181,8 @@ class RevLimiterDetector:
         if redline >= current - lower_tolerance:
             self._redline[car] = max(current, float(redline))
             self._lower_candidate.pop(car, None)
+            return
+        if source not in self.LOWER_TRUSTED_SOURCES:
             return
 
         candidate, count = self._lower_candidate.get(car, (redline, 0))

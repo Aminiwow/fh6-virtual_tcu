@@ -901,7 +901,7 @@ class TCULogic:
         target_pct: float,
         source: str,
     ) -> tuple[float, str]:
-        if source not in {"power cross", "falling power", "power ceiling"}:
+        if source not in {"power cross", "falling power", "power ceiling", "power peak"}:
             return target_pct, source
 
         lead_rpm = self._upshift_lead_rpm(td)
@@ -1475,7 +1475,38 @@ class TCULogic:
             return None
         if td.throttle < 0.55:
             return None
-        return self._power_cross_upshift_target_pct(td, offset)
+        return self._learned_power_upshift_target_pct(td, offset)
+
+    def _learned_power_upshift_target_pct(
+        self,
+        td: Telemetry,
+        offset: float,
+    ) -> tuple[float, str] | None:
+        target = self._power_cross_upshift_target_pct(td, offset)
+        if target is not None:
+            return target
+        return self._power_peak_upshift_target_pct(td, offset)
+
+    def _power_peak_upshift_target_pct(
+        self,
+        td: Telemetry,
+        offset: float,
+    ) -> tuple[float, str] | None:
+        if td.gear < 1 or td.gear >= 10 or td.engine_max_rpm <= 0:
+            return None
+        current_ratio = self._calibrator.ratio_for_gear(td.car_key, td.gear)
+        next_ratio = self._calibrator.ratio_for_gear(td.car_key, td.gear + 1)
+        if not current_ratio or not next_ratio:
+            return None
+        if not self._power_curve.has_mature_data(td.car_key):
+            return None
+        peak_abs_rpm = self._power_curve.peak_power_abs_rpm(td.car_key)
+        if peak_abs_rpm is None:
+            return None
+
+        peak_pct = peak_abs_rpm / td.engine_max_rpm
+        target_pct = max(0.50, min(0.985, peak_pct + offset))
+        return min(target_pct, self._upshift_ceiling_pct(td)), "power peak"
 
     def _power_cross_upshift_target_pct(
         self,
@@ -1558,7 +1589,7 @@ class TCULogic:
             return empty
         if not self._power_curve.has_mature_data(td.car_key):
             return empty
-        target = self._power_cross_upshift_target_pct(td, offset=0.03)
+        target = self._learned_power_upshift_target_pct(td, offset=0.03)
         if target is None:
             return empty
 

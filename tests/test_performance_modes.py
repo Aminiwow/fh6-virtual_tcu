@@ -6,6 +6,7 @@ from virtual_tcu.config.store import ConfigStore
 from virtual_tcu.core.mode import Mode
 from virtual_tcu.detectors.airtime import AirtimeDetector
 from virtual_tcu.input.interface import OutputInterface
+from virtual_tcu.learning.rev_limiter import RevLimiterDetector
 from virtual_tcu.logic.tcu import TCULogic
 from virtual_tcu.storage.profiles import ProfileStore
 from virtual_tcu.telemetry.logger import TelemetryLogger
@@ -169,6 +170,24 @@ def test_race_upshift_leads_fast_rpm_rise(tmp_path):
     assert "lead" in tcu._tcu_state_sub
 
 
+def test_race_upshift_uses_power_peak_when_cross_unavailable(tmp_path):
+    tcu, output = make_tcu(tmp_path, "RACE")
+    car_key = (1, 5, 900)
+    tcu._current_car_key = car_key
+    seed_ratios(tcu, car_key)
+    tcu._rev_limiter.load(car_key, 6840.0)
+    tcu._power_curve.has_mature_data = lambda _car_key: True
+    tcu._power_curve.has_power_lookup = lambda _car_key: False
+    tcu._power_curve.peak_power_abs_rpm = lambda _car_key: 5300.0
+    tcu._power_curve.max_high_power_rpm = lambda _car_key, min_peak_ratio=0.80: 6850.0
+
+    tcu.process(telemetry(current_rpm=5600.0, gear=5, accel_raw=255))
+
+    assert output.up == 1
+    assert tcu._tcu_state == "UPSHIFT"
+    assert tcu._tcu_state_sub == "power peak"
+
+
 def test_optimal_shift_snapshot_is_gear_pair_specific(tmp_path):
     tcu, _output = make_tcu(tmp_path, "RACE")
     car_key = (1, 5, 900)
@@ -195,6 +214,24 @@ def test_optimal_shift_snapshot_is_gear_pair_specific(tmp_path):
     assert fifth["optimal_shift_from_gear"] == 5
     assert fifth["optimal_shift_to_gear"] == 6
     assert second["optimal_shift_rpm"] != fifth["optimal_shift_rpm"]
+
+
+def test_optimal_shift_snapshot_uses_power_peak_fallback(tmp_path):
+    tcu, _output = make_tcu(tmp_path, "RACE")
+    car_key = (1, 5, 900)
+    tcu._current_car_key = car_key
+    seed_ratios(tcu, car_key)
+    tcu._power_curve.has_mature_data = lambda _car_key: True
+    tcu._power_curve.has_power_lookup = lambda _car_key: False
+    tcu._power_curve.peak_power_abs_rpm = lambda _car_key: 5300.0
+    tcu._power_curve.max_high_power_rpm = lambda _car_key, min_peak_ratio=0.80: 6850.0
+
+    snapshot = tcu._optimal_shift_snapshot(telemetry(current_rpm=5000.0, gear=5))
+
+    assert snapshot["optimal_shift_from_gear"] == 5
+    assert snapshot["optimal_shift_to_gear"] == 6
+    assert snapshot["optimal_shift_rpm"] == 5540
+    assert snapshot["optimal_shift_source"] == "power peak"
 
 
 def test_learn_mode_guides_without_auto_shifting(tmp_path):
@@ -258,6 +295,29 @@ def test_learn_mode_announces_done_when_curve_and_ratios_are_ready(tmp_path):
     assert output.down == 0
     assert tcu._tcu_state == "LEARN DONE"
     assert "switch to Race" in tcu._tcu_state_sub
+
+
+def test_rev_limiter_ignores_positive_power_drag_plateau():
+    detector = RevLimiterDetector()
+    car_key = telemetry().car_key
+    detector.load(car_key, 8000.0)
+
+    rpms = [6749, 6801, 6755, 6797, 6761, 6792, 6766, 6787, 6772, 6782] * 4
+    for i, rpm in enumerate(rpms):
+        detector.observe(
+            telemetry(
+                current_rpm=float(rpm),
+                gear=5,
+                accel_raw=255,
+                speed_ms=42.0,
+                power_w=78000.0,
+                torque_nm=110.0,
+            ),
+            last_downshift_time=-999.0,
+            now=float(i) * 0.05,
+        )
+
+    assert detector.effective_redline(telemetry()) == 8000.0
 
 
 def test_race_track_brake_accepts_sustained_medium_brake(tmp_path):
