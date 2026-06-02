@@ -8,6 +8,7 @@ param(
     [switch]$SkipChecks,
     [switch]$SkipPythonTests,
     [switch]$SkipTypecheck,
+    [switch]$SkipWorkflowDispatch,
     [switch]$AllowNonMain,
     [switch]$DryRun,
     [switch]$Yes
@@ -86,11 +87,21 @@ function Get-NextVersion {
 function Get-GitHubActionsUrl {
     param([string]$RemoteUrl)
 
+    $repo = Get-GitHubRepoSlug -RemoteUrl $RemoteUrl
+    if ([string]::IsNullOrWhiteSpace($repo)) {
+        return ""
+    }
+    return "https://github.com/$repo/actions/workflows/release.yml"
+}
+
+function Get-GitHubRepoSlug {
+    param([string]$RemoteUrl)
+
     if ($RemoteUrl -match '^https://github\.com/([^/]+/[^/.]+)(?:\.git)?$') {
-        return "https://github.com/$($Matches[1])/actions/workflows/release.yml"
+        return $Matches[1]
     }
     if ($RemoteUrl -match '^git@github\.com:([^/]+/[^/.]+)(?:\.git)?$') {
-        return "https://github.com/$($Matches[1])/actions/workflows/release.yml"
+        return $Matches[1]
     }
     return ""
 }
@@ -211,6 +222,20 @@ Invoke-Step git @("commit", "--no-verify", "-m", $Message)
 Invoke-Step git @("tag", "-a", $tag, "-m", "Release $tag")
 Invoke-Step git @("push", $Remote, "HEAD:$Branch")
 Invoke-Step git @("push", $Remote, $tag)
+
+$repoSlug = Get-GitHubRepoSlug -RemoteUrl $remoteUrl
+if (-not $SkipWorkflowDispatch) {
+    if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
+        Write-Host ""
+        Write-Host "gh is not available; tag was pushed, but the release workflow was not manually dispatched." -ForegroundColor Yellow
+    } else {
+        $workflowArgs = @("workflow", "run", "release.yml", "--ref", $tag)
+        if (-not [string]::IsNullOrWhiteSpace($repoSlug)) {
+            $workflowArgs += @("--repo", $repoSlug)
+        }
+        Invoke-Step gh $workflowArgs
+    }
+}
 
 Write-Host ""
 if ($DryRun) {
