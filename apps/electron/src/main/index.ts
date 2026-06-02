@@ -65,10 +65,16 @@ function resolveBackendCommand(): { cmd: string; args: string[]; cwd: string } {
     }
   }
 
+  const root = join(__dirname, '..', '..', '..', '..')
+  const venvPython =
+    process.platform === 'win32'
+      ? join(root, '.venv', 'Scripts', 'python.exe')
+      : join(root, '.venv', 'bin', 'python')
+
   return {
-    cmd: 'python',
+    cmd: existsSync(venvPython) ? venvPython : 'python',
     args: ['-m', 'virtual_tcu', '--backend-only'],
-    cwd: join(__dirname, '..', '..', '..', '..'),
+    cwd: root,
   }
 }
 

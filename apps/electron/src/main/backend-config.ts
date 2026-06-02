@@ -3,7 +3,7 @@ import { networkInterfaces } from 'node:os'
 import { join } from 'node:path'
 import { app } from 'electron'
 
-const DEFAULT_HOST = '127.0.0.1'
+const DEFAULT_HOST = '0.0.0.0'
 const DEFAULT_PORT = 8765
 
 export interface BackendEndpoints {

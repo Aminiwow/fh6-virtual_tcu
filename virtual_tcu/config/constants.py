@@ -1,7 +1,7 @@
 class Cfg:
     UDP_IP = "0.0.0.0"
     UDP_PORT = 5555
-    WEB_HOST = "127.0.0.1"
+    WEB_HOST = "0.0.0.0"
     WEB_PORT = 8765
     CONFIG_FILE = "tcu_config.json"
     PROFILES_FILE = "tcu_profiles.json"
@@ -65,7 +65,7 @@ DEFAULTS = {
     "gamepad_shift_up": "B",
     "gamepad_shift_down": "X",
     "current_mode": "COMFORT",
-    "web_host": "127.0.0.1",
+    "web_host": "0.0.0.0",
     "web_port": 8765,
     "udp_port": 5555,
 }

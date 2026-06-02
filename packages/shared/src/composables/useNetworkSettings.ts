@@ -30,7 +30,7 @@ export function useNetworkSettings(config: () => ConfigMap) {
   const applyOk = ref(false)
 
   function syncFromConfig() {
-    draftHost.value = String(config().web_host ?? '127.0.0.1')
+    draftHost.value = String(config().web_host ?? '0.0.0.0')
     draftWebPort.value = String(config().web_port ?? 8765)
     draftUdpPort.value = String(config().udp_port ?? 5555)
     applyError.value = ''

@@ -95,6 +95,100 @@ def seed_ratios(tcu: TCULogic, car_key=(1, 5, 900)):
     tcu._calibrator._wheel_radius_counts[car_key] = 8
 
 
+def test_profile_signature_tracks_new_learned_ratios(tmp_path):
+    tcu, _output = make_tcu(tmp_path, "RACE")
+    car_key = (1, 5, 900)
+    tcu._current_car_key = car_key
+    tcu._calibrator._ratios[car_key] = {1: 13.0, 2: 10.0, 3: 7.2}
+    tcu._calibrator._counts[car_key] = {1: 8, 2: 8, 3: 8}
+
+    before = tcu._profile_signature(car_key)
+
+    tcu._calibrator._ratios[car_key][4] = 5.6
+    tcu._calibrator._counts[car_key][4] = 8
+
+    assert tcu._profile_signature(car_key) != before
+
+
+def test_upshift_decision_logs_target_context(tmp_path):
+    tcu, output = make_tcu(tmp_path, "RACE")
+    seed_ratios(tcu)
+    events = []
+    tcu._logger.record_decision = events.append
+
+    shifted = tcu._track_upshift_in_band(
+        telemetry(current_rpm=7900.0, gear=3, accel_raw=255, speed_ms=35.0),
+        time.time(),
+        offset=0.03,
+    )
+
+    assert shifted
+    assert output.up == 1
+    assert events[-1]["event"] == "shift_up"
+    assert events[-1]["upshift_target_rpm"] > 0
+    assert events[-1]["upshift_strategy_source"]
+    assert events[-1]["ratio_current"] == 7.2
+    assert events[-1]["ratio_next"] == 5.6
+
+
+def test_confirmed_upshift_shortens_lock_when_next_target_is_close(tmp_path):
+    tcu, _output = make_tcu(tmp_path, "RACE")
+    seed_ratios(tcu)
+    tcu._current_car_key = (1, 5, 900)
+    tcu._performance_upshift_target_pct = lambda _td, _offset: (0.715, "power cross")
+    events = []
+    tcu._logger.record_decision = events.append
+
+    now = time.time()
+    tcu._prev_gear = 4
+    tcu._we_shifted = False
+    tcu._pending_upshift_gear = 5
+    tcu._pending_upshift_until = now + 0.65
+    tcu._lock_until = now + 0.65
+    tcu._no_upshift_until = now + 0.65
+
+    tcu.process(telemetry(current_rpm=5600.0, gear=5, accel_raw=255, speed_ms=42.0))
+
+    assert tcu._pending_upshift_gear is None
+    assert tcu._lock_until < time.time() + 0.10
+    assert tcu._no_upshift_until < time.time() + 0.10
+    assert events[-1]["event"] == "upshift_confirm"
+    assert events[-1]["post_upshift_hold_s"] == 0.03
+
+
+def test_learned_power_upshift_overrides_turbo_lag_block(tmp_path):
+    tcu, output = make_tcu(tmp_path, "RACE")
+    seed_ratios(tcu)
+    tcu._performance_upshift_target_pct = lambda _td, _offset: (0.75, "power cross")
+    tcu._turbo_lag_block_upshift = lambda _td: True
+
+    shifted = tcu._track_upshift_in_band(
+        telemetry(current_rpm=6100.0, gear=4, accel_raw=255, speed_ms=35.0),
+        time.time(),
+        offset=0.03,
+    )
+
+    assert shifted
+    assert output.up == 1
+
+
+def test_turbo_lag_still_blocks_fallback_upshift(tmp_path):
+    tcu, output = make_tcu(tmp_path, "RACE")
+    seed_ratios(tcu)
+    tcu._performance_upshift_target_pct = lambda _td, _offset: None
+    tcu._race_upshift_target_pct = lambda _td: (0.75, "race fallback")
+    tcu._turbo_lag_block_upshift = lambda _td: True
+
+    shifted = tcu._track_upshift_in_band(
+        telemetry(current_rpm=6100.0, gear=4, accel_raw=255, speed_ms=35.0),
+        time.time(),
+        offset=0.03,
+    )
+
+    assert not shifted
+    assert output.up == 0
+
+
 def wheel_speed_for(speed_ms: float, radius: float = 0.34) -> float:
     return speed_ms / radius
 

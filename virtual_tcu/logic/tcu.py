@@ -155,9 +155,20 @@ class TCULogic:
             self._last_profile_signature = self._profile_signature(ck)
 
     def _profile_signature(self, ck: tuple) -> tuple:
+        ratios = self._calibrator.get_ratios(ck)
+        counts = self._calibrator._counts.get(ck, {})
+        ratio_signature = tuple(
+            (gear, round(ratio, 4), counts.get(gear, 0))
+            for gear, ratio in sorted(ratios.items())
+        )
+        progress = self._power_curve.learning_progress(ck)
         return (
             self._rev_limiter.dump(ck),
-            self._calibrator.has_data(ck),
+            ratio_signature,
+            progress.get("samples", 0),
+            progress.get("points", 0),
+            progress.get("min_rpm"),
+            progress.get("max_rpm"),
             self._power_curve.has_mature_data(ck),
             round(self._power_curve.confidence(ck), 2),
         )
@@ -437,7 +448,20 @@ class TCULogic:
             return
 
         if td.gear != self._prev_gear and td.gear > 0 and self._prev_gear > 0:
-            if not self._we_shifted:
+            if self._pending_upshift_gear is not None and td.gear >= self._pending_upshift_gear:
+                pending_gear = self._pending_upshift_gear
+                self._pending_upshift_gear = None
+                self._pending_upshift_until = 0.0
+                hold_s = self._post_upshift_confirm_hold_s(td)
+                self._lock_until = min(self._lock_until, now + hold_s)
+                self._no_upshift_until = min(self._no_upshift_until, now + hold_s)
+                self._record_decision(
+                    "upshift_confirm",
+                    td,
+                    pending_gear=pending_gear,
+                    post_upshift_hold_s=round(hold_s, 3),
+                )
+            elif not self._we_shifted:
                 airborne = self._config.get("feat_airtime_lock") and self._airtime.is_airborne
                 external_downshift = td.gear < self._prev_gear
                 if td.brake < 0.30 and not airborne:
@@ -451,10 +475,6 @@ class TCULogic:
                         else 0.5
                     )
                     self._no_upshift_until = max(self._no_upshift_until, now + hold_s)
-            elif self._pending_upshift_gear is not None and td.gear >= self._pending_upshift_gear:
-                self._pending_upshift_gear = None
-                self._pending_upshift_until = 0.0
-                self._no_upshift_until = min(self._no_upshift_until, now + 0.15)
         if self._pending_upshift_gear is not None and now > self._pending_upshift_until:
             self._pending_upshift_gear = None
             self._pending_upshift_until = 0.0
@@ -666,6 +686,7 @@ class TCULogic:
         sub: str = "",
         *,
         downshift_lock_s: float = 1.0,
+        decision_extra: dict | None = None,
     ) -> bool:
         if td.gear >= 10:
             return False
@@ -692,7 +713,10 @@ class TCULogic:
         self._shift_count += 1
         self._kb.shift_up()
         self._logger.mark_event()
-        self._record_decision("shift_up", td, state=state, reason=sub)
+        decision = {"state": state, "reason": sub}
+        if decision_extra:
+            decision.update(decision_extra)
+        self._record_decision("shift_up", td, **decision)
         self._shift_history.record("UP", td, reason=state, rule=self.mode.value)
         self._session_stats.record_shift("UP", state)
         if WINSOUND_OK and self._config.get("feat_sound_beep"):
@@ -937,6 +961,94 @@ class TCULogic:
         }
         data.update(extra)
         self._logger.record_decision(data)
+
+    def _post_upshift_confirm_hold_s(self, td: Telemetry) -> float:
+        if td.engine_max_rpm <= 0 or td.gear < 1 or td.throttle < 0.55 or td.brake > 0.05:
+            return 0.12
+
+        offset_by_mode = {
+            Mode.RACE: 0.03,
+            Mode.DYNAMIC: 0.05,
+            Mode.OFFROAD: 0.07,
+        }
+        offset = offset_by_mode.get(self.mode)
+        target_pct: float | None = None
+        if offset is not None:
+            performance_target = self._performance_upshift_target_pct(td, offset)
+            if performance_target is not None:
+                target_pct = min(performance_target[0], self._upshift_ceiling_pct(td))
+            elif self.mode == Mode.RACE:
+                target_pct, _source = self._race_upshift_target_pct(td)
+
+        if target_pct is None:
+            return 0.12
+
+        gap_rpm = target_pct * td.engine_max_rpm - td.current_rpm
+        if gap_rpm <= 250.0:
+            return 0.03
+        if gap_rpm <= 500.0:
+            return 0.05
+        if gap_rpm <= 900.0:
+            return 0.08
+        return 0.12
+
+    def _upshift_decision_fields(
+        self,
+        td: Telemetry,
+        *,
+        command_pct: float,
+        command_source: str,
+        strategy_pct: float,
+        strategy_source: str,
+        base_pct: float,
+        ceiling_pct: float,
+        offset: float,
+    ) -> dict:
+        max_rpm = max(td.engine_max_rpm, 1.0)
+        current_ratio = self._calibrator.ratio_for_gear(td.car_key, td.gear)
+        next_ratio = self._calibrator.ratio_for_gear(td.car_key, td.gear + 1)
+        projected_next_rpm = None
+        if current_ratio and next_ratio:
+            projected_next_rpm = command_pct * max_rpm * next_ratio / current_ratio
+
+        progress = self._power_curve.learning_progress(td.car_key)
+        peak_rpm = self._power_curve.peak_power_abs_rpm(td.car_key)
+        current_power = self._power_curve.power_at_rpm(td.car_key, td.current_rpm)
+        projected_power = (
+            self._power_curve.power_at_rpm(td.car_key, projected_next_rpm)
+            if projected_next_rpm is not None
+            else None
+        )
+        command_rpm = command_pct * max_rpm
+        base_rpm = base_pct * max_rpm
+        return {
+            "upshift_target_rpm": round(command_rpm, 1),
+            "upshift_target_pct": round(command_pct, 4),
+            "upshift_target_source": command_source,
+            "upshift_strategy_rpm": round(strategy_pct * max_rpm, 1),
+            "upshift_strategy_pct": round(strategy_pct, 4),
+            "upshift_strategy_source": strategy_source,
+            "upshift_base_target_rpm": round(base_rpm, 1),
+            "upshift_ceiling_rpm": round(ceiling_pct * max_rpm, 1),
+            "upshift_lead_rpm": round(max(0.0, base_rpm - command_rpm), 1),
+            "upshift_offset": round(offset, 4),
+            "projected_next_rpm": round(projected_next_rpm, 1)
+            if projected_next_rpm is not None
+            else None,
+            "ratio_current": round(current_ratio, 5) if current_ratio else None,
+            "ratio_next": round(next_ratio, 5) if next_ratio else None,
+            "power_peak_rpm": round(peak_rpm, 1) if peak_rpm is not None else None,
+            "power_current_hp": round(current_power, 1) if current_power is not None else None,
+            "power_projected_next_hp": round(projected_power, 1)
+            if projected_power is not None
+            else None,
+            "turbo_lag_block": self._turbo_lag_block_upshift(td),
+            "boost_raw": round(td.boost_raw, 3),
+            "turbo_bar": round(self._turbo_bar, 3),
+            "power_samples": progress.get("samples", 0),
+            "power_points": progress.get("points", 0),
+            "power_confidence": round(self._power_curve.confidence(td.car_key), 3),
+        }
 
     def _should_brake_downshift(self, td: Telemetry, base_thr: float) -> bool:
         if td.brake < base_thr:
@@ -1410,39 +1522,90 @@ class TCULogic:
             return False
         if now < self._no_upshift_until:
             return False
-        if self._turbo_lag_block_upshift(td):
-            return False
         if td.speed_kmh <= Cfg.MIN_SPEED_KMH:
             return False
 
         performance_target = self._performance_upshift_target_pct(td, offset)
         if performance_target is not None:
-            target_pct, source = performance_target
-            target_pct = min(target_pct, self._upshift_ceiling_pct(td))
-            target_pct, source = self._upshift_command_target_pct(td, target_pct, source)
+            strategy_pct, strategy_source = performance_target
+            ceiling_pct = self._upshift_ceiling_pct(td)
+            base_pct = min(strategy_pct, ceiling_pct)
+            target_pct, source = self._upshift_command_target_pct(td, base_pct, strategy_source)
             if td.rpm_pct < target_pct:
                 return False
-            return self._shift_up(td, 300, "UPSHIFT", source, downshift_lock_s=downshift_lock_s)
+            return self._shift_up(
+                td,
+                300,
+                "UPSHIFT",
+                source,
+                downshift_lock_s=downshift_lock_s,
+                decision_extra=self._upshift_decision_fields(
+                    td,
+                    command_pct=target_pct,
+                    command_source=source,
+                    strategy_pct=strategy_pct,
+                    strategy_source=strategy_source,
+                    base_pct=base_pct,
+                    ceiling_pct=ceiling_pct,
+                    offset=offset,
+                ),
+            )
+
+        if self._turbo_lag_block_upshift(td):
+            return False
 
         if self.mode == Mode.RACE:
             target_pct, source = self._race_upshift_target_pct(td)
             if td.rpm_pct < target_pct:
                 return False
-            return self._shift_up(td, 300, "UPSHIFT", source, downshift_lock_s=downshift_lock_s)
+            return self._shift_up(
+                td,
+                300,
+                "UPSHIFT",
+                source,
+                downshift_lock_s=downshift_lock_s,
+                decision_extra=self._upshift_decision_fields(
+                    td,
+                    command_pct=target_pct,
+                    command_source=source,
+                    strategy_pct=target_pct,
+                    strategy_source=source,
+                    base_pct=target_pct,
+                    ceiling_pct=self._upshift_ceiling_pct(td),
+                    offset=offset,
+                ),
+            )
 
         fallback = self._mode_upshift_fallback_pct()
         mature_curve = self._power_curve.has_mature_data(td.car_key)
-        target_pct = self._power_curve.optimal_upshift_rpm(
+        strategy_pct = self._power_curve.optimal_upshift_rpm(
             td,
             fallback=fallback,
             offset=offset,
             blend_fallback=not mature_curve,
         )
-        target_pct = min(target_pct, self._upshift_ceiling_pct(td))
-        target_pct, source = self._upshift_command_target_pct(td, target_pct, "in band")
+        ceiling_pct = self._upshift_ceiling_pct(td)
+        base_pct = min(strategy_pct, ceiling_pct)
+        target_pct, source = self._upshift_command_target_pct(td, base_pct, "in band")
         if td.rpm_pct < target_pct:
             return False
-        return self._shift_up(td, 300, "UPSHIFT", source, downshift_lock_s=downshift_lock_s)
+        return self._shift_up(
+            td,
+            300,
+            "UPSHIFT",
+            source,
+            downshift_lock_s=downshift_lock_s,
+            decision_extra=self._upshift_decision_fields(
+                td,
+                command_pct=target_pct,
+                command_source=source,
+                strategy_pct=strategy_pct,
+                strategy_source="in band",
+                base_pct=base_pct,
+                ceiling_pct=ceiling_pct,
+                offset=offset,
+            ),
+        )
 
     def _race_upshift_target_pct(self, td: Telemetry) -> tuple[float, str]:
         if td.engine_max_rpm <= 0:

@@ -1,7 +1,7 @@
 {
   "name": "virtual-tcu-monorepo",
   "type": "module",
-  "version": "13.4.1",
+  "version": "13.4.4",
   "private": true,
   "packageManager": "pnpm@10.33.0",
   "engines": {
@@ -9,13 +9,14 @@
     "pnpm": ">=10.33.0"
   },
   "scripts": {
-    "dev:dashboard": "pnpm --filter virtual-tcu-web-ui dev",
-    "dev:electron": "pnpm --filter virtual-tcu dev",
-    "build:dashboard": "pnpm --filter virtual-tcu-web-ui build",
-    "build:electron": "pnpm --filter virtual-tcu build",
+    "dev:dashboard": "corepack pnpm --filter virtual-tcu-web-ui dev",
+    "dev:electron": "corepack pnpm --filter virtual-tcu dev",
+    "build:dashboard": "corepack pnpm --filter virtual-tcu-web-ui build",
+    "build:electron": "corepack pnpm --filter virtual-tcu build",
     "version:sync": "node scripts/sync-version.mjs",
-    "build": "pnpm version:sync && pnpm build:dashboard && pnpm build:electron",
-    "typecheck": "pnpm -r typecheck",
+    "build": "corepack pnpm version:sync && corepack pnpm build:dashboard && corepack pnpm build:electron",
+    "release:push": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release.ps1",
+    "typecheck": "corepack pnpm -r typecheck",
     "lint": "eslint . && ruff check virtual_tcu virtual_tcu.py",
     "lint:py": "ruff check virtual_tcu virtual_tcu.py",
     "format": "prettier --write . && ruff format virtual_tcu virtual_tcu.py",
