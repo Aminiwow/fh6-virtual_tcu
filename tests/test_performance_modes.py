@@ -94,6 +94,10 @@ def seed_ratios(tcu: TCULogic, car_key=(1, 5, 900)):
     tcu._calibrator._wheel_radius_counts[car_key] = 8
 
 
+def wheel_speed_for(speed_ms: float, radius: float = 0.34) -> float:
+    return speed_ms / radius
+
+
 def test_race_power_down_uses_target_gear(tmp_path):
     tcu, output = make_tcu(tmp_path, "RACE")
     seed_ratios(tcu)
@@ -122,11 +126,159 @@ def test_race_power_down_skips_when_projected_power_is_worse(tmp_path):
     assert tcu._tcu_state == "RACE"
 
 
+def test_race_upshift_uses_power_cross_before_limiter(tmp_path):
+    tcu, output = make_tcu(tmp_path, "RACE")
+    car_key = (1, 5, 900)
+    tcu._current_car_key = car_key
+    seed_ratios(tcu, car_key)
+    tcu._power_curve.has_power_lookup = lambda _car_key: True
+    tcu._power_curve.peak_power_abs_rpm = lambda _car_key: 5700.0
+    tcu._power_curve.max_high_power_rpm = lambda _car_key, min_peak_ratio=0.80: 7600.0
+
+    def power_at_rpm(_car_key, rpm):
+        if rpm < 4800.0:
+            return 340.0
+        if rpm < 5700.0:
+            return 420.0
+        return max(300.0, 420.0 - (rpm - 5700.0) * 0.04)
+
+    tcu._power_curve.power_at_rpm = power_at_rpm
+    tcu._power_curve.power_slope_at_rpm = lambda _car_key, _rpm: -0.04
+
+    tcu.process(telemetry(current_rpm=6500.0, gear=5, accel_raw=240))
+
+    assert output.up == 1
+    assert tcu._tcu_state == "UPSHIFT"
+    assert "power" in tcu._tcu_state_sub
+
+
+def test_race_upshift_leads_fast_rpm_rise(tmp_path):
+    tcu, output = make_tcu(tmp_path, "RACE")
+    car_key = (1, 5, 900)
+    tcu._current_car_key = car_key
+    seed_ratios(tcu, car_key)
+    tcu._performance_upshift_target_pct = lambda _td, _offset: (0.86, "power cross")
+    tcu._power_curve.peak_power_abs_rpm = lambda _car_key: 6200.0
+    tcu._rpm_rate_history.extend([7600.0, 8000.0, 8400.0])
+
+    tcu.process(telemetry(current_rpm=6700.0, gear=5, accel_raw=245))
+
+    assert output.up == 1
+    assert tcu._tcu_state == "UPSHIFT"
+    assert "lead" in tcu._tcu_state_sub
+
+
 def test_race_track_brake_accepts_sustained_medium_brake(tmp_path):
     tcu, output = make_tcu(tmp_path, "RACE")
     tcu._speed_history.extend([120, 119, 118, 117, 116, 115, 113, 111])
 
     tcu.process(telemetry(current_rpm=4200.0, brake_raw=88, accel_raw=0, gear=5))
+
+    assert output.down == 1
+    assert tcu._tcu_state == "BRAKE DOWN"
+
+
+def test_race_brake_down_with_only_current_ratio_learned(tmp_path):
+    tcu, output = make_tcu(tmp_path, "RACE")
+    car_key = (1, 5, 900)
+    tcu._current_car_key = car_key
+    tcu._calibrator._ratios[car_key] = {5: 4.4}
+    tcu._calibrator._counts[car_key] = {5: 8}
+    tcu._calibrator._wheel_radius[car_key] = 0.34
+    tcu._calibrator._wheel_radius_counts[car_key] = 8
+    tcu._speed_history.extend([120, 119, 118, 117, 116, 115, 113, 111])
+    tcu._brake_history.extend([90 / 255] * 6)
+    tcu._brake_raw_history.extend([90 / 255] * 6)
+
+    speed_ms = 32.0
+    wheel_speed = wheel_speed_for(speed_ms)
+    tcu.process(
+        telemetry(
+            current_rpm=4200.0,
+            gear=5,
+            speed_ms=speed_ms,
+            accel_raw=0,
+            brake_raw=90,
+            wheel_speed_fl=wheel_speed,
+            wheel_speed_fr=wheel_speed,
+            wheel_speed_rl=wheel_speed,
+            wheel_speed_rr=wheel_speed,
+        )
+    )
+
+    assert output.down == 1
+    assert tcu._tcu_state == "BRAKE DOWN"
+
+
+def test_race_brake_engine_downshifts_when_target_would_hold_current(tmp_path):
+    tcu, output = make_tcu(tmp_path, "RACE")
+    car_key = (1, 5, 900)
+    tcu._current_car_key = car_key
+    seed_ratios(tcu, car_key)
+    tcu._speed_history.extend([168, 166, 164, 162, 160, 158, 156, 154])
+    tcu._brake_history.extend([82 / 255] * 6)
+    tcu._brake_raw_history.extend([82 / 255] * 6)
+
+    speed_ms = 160.0 / 3.6
+    wheel_speed = wheel_speed_for(speed_ms)
+    td = telemetry(
+        current_rpm=5500.0,
+        gear=5,
+        speed_ms=speed_ms,
+        accel_raw=0,
+        brake_raw=82,
+        wheel_speed_fl=wheel_speed,
+        wheel_speed_fr=wheel_speed,
+        wheel_speed_rl=wheel_speed,
+        wheel_speed_rr=wheel_speed,
+    )
+    brake_margin = 0.20 * min(1.0, td.brake / 0.80)
+    assert tcu._target_gear_for_braking(td, td.speed_kmh * (1.0 - brake_margin)) == td.gear
+
+    tcu.process(td)
+
+    assert output.down == 1
+    assert tcu._tcu_state == "BRAKE DOWN"
+    assert "engine brake" in tcu._tcu_state_sub
+
+
+def test_invalid_zero_packet_does_not_reverse_lock_brake_down(tmp_path):
+    tcu, output = make_tcu(tmp_path, "RACE")
+    car_key = (1, 5, 900)
+    tcu._current_car_key = car_key
+    seed_ratios(tcu, car_key)
+
+    tcu.process(
+        telemetry(
+            engine_max_rpm=0.0,
+            current_rpm=0.0,
+            gear=0,
+            car_ordinal=0,
+            car_class=0,
+            pi=0,
+        )
+    )
+    assert tcu._tcu_state == "NO DATA"
+    assert tcu._reverse_lock_until == 0.0
+
+    tcu._speed_history.extend([138, 136, 134, 132, 130, 128, 126, 124])
+    tcu._brake_history.extend([255 / 255] * 6)
+    tcu._brake_raw_history.extend([255 / 255] * 6)
+    speed_ms = 130.0 / 3.6
+    wheel_speed = wheel_speed_for(speed_ms)
+    tcu.process(
+        telemetry(
+            current_rpm=5200.0,
+            gear=5,
+            speed_ms=speed_ms,
+            accel_raw=0,
+            brake_raw=255,
+            wheel_speed_fl=wheel_speed,
+            wheel_speed_fr=wheel_speed,
+            wheel_speed_rl=wheel_speed,
+            wheel_speed_rr=wheel_speed,
+        )
+    )
 
     assert output.down == 1
     assert tcu._tcu_state == "BRAKE DOWN"
@@ -154,6 +306,29 @@ def test_airtime_detector_reports_landing_window():
     assert not detector.is_airborne
     assert detector.just_landed
     assert detector.landing_recovery(now=100.20)
+
+
+def test_brake_lockup_slip_does_not_count_as_airtime():
+    detector = AirtimeDetector()
+    locked_brake = telemetry(
+        speed_ms=30.0,
+        brake_raw=255,
+        accel_y=0.0,
+        slip_fl=3.0,
+        slip_fr=3.0,
+        slip_rl=3.0,
+        slip_rr=3.0,
+        suspension_norm_fl=0.25,
+        suspension_norm_fr=0.25,
+        suspension_norm_rl=0.25,
+        suspension_norm_rr=0.25,
+    )
+
+    for i in range(5):
+        detector.update(locked_brake, now=200.0 + i * 0.016)
+
+    assert not detector.is_airborne
+    assert not detector.just_landed
 
 
 def test_landing_recovery_clears_downshift_lock(tmp_path):

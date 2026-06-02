@@ -60,10 +60,17 @@ class AirtimeDetector:
         vertical_airborne = (
             td.speed_kmh > 20.0
             and low_g
+            and td.brake < 0.35
             and abs(td.vel_y) >= self.VERTICAL_SPEED_AIRBORNE_MS
             and slip_votes >= 2
         )
-        fallback_airborne = td.speed_kmh > 20.0 and low_g and (all_spin or slip_votes >= 3)
+        slip_airborne_allowed = td.brake < 0.25
+        fallback_airborne = (
+            td.speed_kmh > 20.0
+            and low_g
+            and slip_airborne_allowed
+            and (all_spin or slip_votes >= 3)
+        )
         airborne_now = suspension_airborne or vertical_airborne or fallback_airborne
 
         if airborne_now:

@@ -1,5 +1,26 @@
 # Changelog
 
+## [13.3.0] - 2026-06-02
+
+### Added
+
+- **Race power-cross upshift** - Race mode now uses learned power curves and gear ratios to compare current-gear power against post-upshift power, shifting near the real acceleration crossover instead of always waiting for the limiter.
+- **Upshift lead compensation** - power-based upshifts can command slightly early when RPM is rising quickly, helping the actual in-game shift land closer to the optimal point.
+- **Engine-brake downshift path** - Race and Offroad braking can request a safe lower gear for stronger engine-braking feel without over-revving.
+- **Performance regression tests** - added coverage for Race power-cross upshifts, fast-RPM lead compensation, engine-brake downshifts, invalid telemetry packets, and brake-lockup airtime false positives.
+
+### Changed
+
+- **Race fallback order** - Race now tries the intelligent power-curve target first, then falls back to the learned limiter / `race_up_wot` target when curve or ratio data is not ready.
+- **Shift advisor parity** - Race, Dynamic Sport, and Offroad shift hints now use the same power-cross target as the automatic shift logic.
+- **Offroad upshift timing** - Offroad keeps its torque-biased behavior but receives a more conservative version of the power-based lead compensation.
+
+### Fixed
+
+- **Brake downshift hesitation** - braking logic no longer refuses useful engine-brake downshifts just because the target-gear selector would otherwise hold the current gear.
+- **Invalid zero telemetry packets** - empty/no-car packets now reset transient locks and show `NO DATA` instead of poisoning reverse or shift state.
+- **Brake lockup mistaken for airtime** - heavy braking slip is no longer counted as airborne evidence.
+
 ## [13.2.0] - 2026-05-29
 
 ### Added
@@ -89,6 +110,27 @@
 ---
 
 # 更新日志
+
+## [13.3.0] - 2026-06-02
+
+### 新增
+
+- **Race 功率交叉点升挡** - Race 模式现在会用已学习的功率曲线和齿比，对比当前挡功率与升挡后功率，在真正更快的加速交叉点附近升挡，而不是总等到断油前。
+- **升挡提前量补偿** - 当 RPM 快速上升时，基于功率的升挡会略微提前发命令，让游戏内实际完成换挡的位置更接近最优点。
+- **引擎制动降挡路径** - Race 与 Offroad 制动时可在不过转的前提下请求更低挡位，带来更明显的引擎制动感。
+- **性能回归测试** - 新增 Race 功率交叉升挡、快速爬转提前量、引擎制动降挡、无效遥测包和刹车抱死误判腾空的测试覆盖。
+
+### 变更
+
+- **Race 回退顺序** - Race 现在优先尝试智能功率曲线目标；功率曲线或齿比数据不足时，才回退到已学习断油点 / `race_up_wot`。
+- **换挡提示一致性** - Race、Dynamic Sport 与 Offroad 的换挡提示现在使用和自动换挡一致的功率交叉点目标。
+- **Offroad 升挡时机** - Offroad 保留偏扭矩的策略，但会使用更保守的功率提前量补偿。
+
+### 修复
+
+- **刹车降挡迟疑** - 当目标挡选择器倾向保持当前挡时，制动逻辑仍可执行有价值且安全的引擎制动降挡。
+- **无效零遥测包** - 空车/无车数据包现在会重置瞬态锁并显示 `NO DATA`，避免污染倒挡或换挡状态。
+- **刹车抱死误判腾空** - 重刹导致的轮胎 slip 不再作为腾空证据。
 
 ## [13.2.0] - 2026-05-29
 
