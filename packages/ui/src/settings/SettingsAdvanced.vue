@@ -1,18 +1,6 @@
 <script setup lang="ts">
-  import { VIGEMBUS_DRIVER_URL } from '@virtual-tcu/shared/config/links'
-  import {
-    NAlert,
-    NButton,
-    NCard,
-    NFlex,
-    NGrid,
-    NGridItem,
-    NInput,
-    NSelect,
-    NSlider,
-    NText,
-  } from 'naive-ui'
-  import { computed, inject, ref } from 'vue'
+  import { NButton, NCard, NFlex, NGrid, NGridItem, NInput, NSlider, NSwitch, NText } from 'naive-ui'
+  import { inject } from 'vue'
   import { settingsContextKey } from './context'
 
   const ctx = inject(settingsContextKey)!
@@ -21,9 +9,8 @@
     store,
     hotkeyFields,
     shiftKeyFields,
-    outputModeOptions,
-    gamepadButtonFields,
-    gamepadButtonOptions,
+    clutchFields,
+    clutchTimingSliders,
     advancedSliders,
     networkDraftHost,
     networkDraftWebPort,
@@ -37,76 +24,19 @@
     onOpenImport,
     restartBackend,
     configNumber,
+    configBool,
     configText,
     sliderUnit,
   } = ctx
 
-  const gamepadCheckError = ref('')
-  const gamepadChecking = ref(false)
-
-  function onInstallDriver() {
-    store.installViGEmBus()
-  }
-
   function applyAndRestart() {
-    // Save network config keys individually via set_config so they are
-    // written to tcu_config.json synchronously before the backend is
-    // killed.  This avoids the race where set_network's async listener
-    // restart is interrupted by the process kill.
     const host = networkDraftHost.value
     const webPort = networkDraftWebPort.value
     const udpPort = networkDraftUdpPort.value
     if (host) store.setConfig('web_host', host)
     if (webPort) store.setConfig('web_port', Number(webPort))
     if (udpPort) store.setConfig('udp_port', Number(udpPort))
-    // Brief delay so the WS messages reach the backend and flush to disk.
     setTimeout(() => restartBackend(), 600)
-  }
-
-  const outputModeValue = computed(() => {
-    const v = (store.config as Record<string, unknown>).output_mode
-    return typeof v === 'string' && (v === 'keyboard' || v === 'gamepad') ? v : 'keyboard'
-  })
-
-  const outputModeOptionsComputed = computed(() =>
-    outputModeOptions.map((o) => ({
-      label: t(`extras.${o.i18nKey}`),
-      value: o.value,
-    })),
-  )
-
-  const vigembusUrl = VIGEMBUS_DRIVER_URL
-
-  async function onOutputModeChange(v: string) {
-    if (v === 'gamepad') {
-      // Backend is already driving shifts via a virtual gamepad — no probe needed.
-      if (store.effectiveOutputMode.value === 'gamepad') {
-        gamepadCheckError.value = ''
-        store.setConfig('output_mode', v)
-        return
-      }
-
-      gamepadCheckError.value = ''
-      gamepadChecking.value = true
-      try {
-        const result = await store.checkGamepad()
-        if (!result.ok) {
-          gamepadCheckError.value =
-            result.error === 'timeout'
-              ? t('extras.gamepadCheckTimeout')
-              : t('extras.gamepadCheckFailed')
-          return
-        }
-      } catch {
-        gamepadCheckError.value = t('extras.gamepadCheckTimeout')
-        return
-      } finally {
-        gamepadChecking.value = false
-      }
-    }
-    // Driver OK or switching to keyboard — save config
-    gamepadCheckError.value = ''
-    store.setConfig('output_mode', v)
   }
 </script>
 
@@ -203,50 +133,9 @@
       <NText depth="3" style="font-size: 12px; display: block; margin-bottom: 8px">
         {{ t('extras.outputModeHint') }}
       </NText>
-      <NSelect
-        :value="outputModeValue"
-        :options="outputModeOptionsComputed"
-        :loading="gamepadChecking"
-        size="small"
-        style="width: 200px"
-        @update:value="onOutputModeChange"
-      />
-      <NAlert
-        v-if="gamepadCheckError"
-        type="error"
-        :title="gamepadCheckError"
-        style="margin-top: 10px"
-      >
-        <template #default>
-          <NFlex vertical :size="8">
-            <NText depth="3" style="font-size: 12px">
-              {{ t('extras.gamepadCheckFailedHint', { url: vigembusUrl }) }}
-            </NText>
-            <NButton type="primary" size="small" @click="onInstallDriver">
-              {{ t('extras.installDriver') }}
-            </NButton>
-          </NFlex>
-        </template>
-      </NAlert>
-      <template v-if="outputModeValue === 'gamepad'">
-        <NText depth="3" style="font-size: 12px; display: block; margin: 12px 0 8px">
-          {{ t('extras.gamepadButtonHint') }}
-        </NText>
-        <NGrid :cols="2" :x-gap="16" :y-gap="10">
-          <NGridItem v-for="g1 in gamepadButtonFields" :key="g1.key">
-            <NFlex justify="space-between" align="center" :size="8">
-              <NText>{{ t(`extras.${g1.i18nKey}`) }}</NText>
-              <NSelect
-                :value="configText(g1.key) || g1.placeholder"
-                :options="gamepadButtonOptions.map((o) => ({ label: o.label, value: o.value }))"
-                size="small"
-                style="width: 140px"
-                @update:value="(v: string) => store.setConfig(g1.key, v)"
-              />
-            </NFlex>
-          </NGridItem>
-        </NGrid>
-      </template>
+      <NText code style="font-family: ui-monospace, monospace">
+        {{ t('extras.outputModeKeyboard') }}
+      </NText>
       <NFlex :size="8" align="center" style="margin-top: 10px">
         <NButton type="warning" size="small" @click="restartBackend()">
           {{ t('extras.saveAndRestart') }}
@@ -275,6 +164,49 @@
           </NFlex>
         </NGridItem>
       </NGrid>
+    </NCard>
+
+    <NCard :title="t('extras.clutchAssist')" size="small" :bordered="false">
+      <NFlex justify="space-between" align="center" style="margin-bottom: 10px">
+        <NText depth="3" style="font-size: 12px">
+          {{ t('extras.clutchAssistHint') }}
+        </NText>
+        <NSwitch
+          :value="configBool('feat_clutch_assist')"
+          @update:value="(v) => store.setConfig('feat_clutch_assist', v)"
+        />
+      </NFlex>
+      <NGrid :cols="2" :x-gap="16" :y-gap="10">
+        <NGridItem v-for="field in clutchFields" :key="field.key">
+          <NFlex justify="space-between" align="center" :size="8">
+            <NText>{{ t(`extras.${field.i18nKey}`) }}</NText>
+            <NInput
+              :value="configText(field.key)"
+              :placeholder="field.placeholder"
+              size="small"
+              style="width: 100px; font-family: ui-monospace, monospace"
+              @update:value="(v) => store.setConfig(field.key, v.trim().toLowerCase())"
+            />
+          </NFlex>
+        </NGridItem>
+      </NGrid>
+      <NFlex vertical :size="14" style="margin-top: 14px">
+        <div v-for="s in clutchTimingSliders" :key="s.key">
+          <NFlex justify="space-between" align="center" style="margin-bottom: 4px">
+            <NText>{{ t(`extras.${s.i18nKey}`) }}</NText>
+            <NText code style="font-family: ui-monospace, monospace">
+              {{ configNumber(s.key) }}{{ sliderUnit(s) }}
+            </NText>
+          </NFlex>
+          <NSlider
+            :value="configNumber(s.key)"
+            :min="s.min"
+            :max="s.max"
+            :step="s.step ?? 1"
+            @update:value="(v) => store.setConfig(s.key, v)"
+          />
+        </div>
+      </NFlex>
     </NCard>
 
     <NCard :title="t('extras.hotkeys')" size="small" :bordered="false">

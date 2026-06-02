@@ -13,6 +13,7 @@ class Cfg:
     ANTI_STALL_RPM = 1100
     MIN_SPEED_KMH = 12.0
     OVER_REV_LIMIT = 1.02
+    IMPACT_DECEL_KMH = 25.0
     REVERSE_HOLD_MS = 700
     REVERSE_EXIT_MS = 500
     BRAKE_SPIKE_DELTA = 0.30
@@ -24,9 +25,6 @@ DEFAULTS = {
     "comfort_up_idle": 40,
     "comfort_up_mid": 58,
     "comfort_up_wot": 82,
-    "dynamic_up_idle": 42,
-    "dynamic_up_mid": 58,
-    "dynamic_up_wot": 82,
     "race_up_idle": 70,
     "race_up_mid": 80,
     "race_up_wot": 98,
@@ -40,6 +38,8 @@ DEFAULTS = {
     "kickdown_pedal": 78,
     "kickdown_rpm": 50,
     "coast_down_rpm": 28,
+    "race_coast_rpm": 30,
+    "offroad_coast_rpm": 32,
     "launch_rpm": 4500,
     "cornering_yaw": 22,
     "feat_cornering_lock": True,
@@ -55,6 +55,7 @@ DEFAULTS = {
     "feat_engine_brake": True,
     "feat_turbo_compensate": True,
     "feat_airtime_lock": True,
+    "feat_landing_recovery": True,
     "feat_transient_lock": True,
     "feat_drive_style": True,
     "hotkey_cycle_mode": "f9",
@@ -62,8 +63,12 @@ DEFAULTS = {
     "shift_key_up": "e",
     "shift_key_down": "q",
     "output_mode": "keyboard",
-    "gamepad_shift_up": "B",
-    "gamepad_shift_down": "X",
+    "feat_clutch_assist": False,
+    "clutch_key": "shift",
+    "clutch_pre_ms": 20,
+    "clutch_overlap_ms": 55,
+    "clutch_release_ms": 25,
+    "hud_template": "classic",
     "current_mode": "COMFORT",
     "web_host": "0.0.0.0",
     "web_port": 8765,

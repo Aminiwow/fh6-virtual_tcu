@@ -41,7 +41,7 @@ export function useTcuStore() {
   const watchdogStuck = ref(false)
   const webUrls = ref<WebUrls | null>(null)
   const webBindStatus = ref<{ ok: boolean; error?: string } | null>(null)
-  const effectiveOutputMode = ref<'keyboard' | 'gamepad' | null>(null)
+  const effectiveOutputMode = ref<'keyboard' | null>(null)
 
   const modal = reactive({
     open: false,
@@ -50,9 +50,6 @@ export function useTcuStore() {
     text: '',
     readOnly: false,
   })
-
-  let gamepadCheckResolve: ((r: { ok: boolean; error: string }) => void) | null = null
-  let gamepadCheckTimer: ReturnType<typeof setTimeout> | null = null
 
   function handle(msg: WsInbound) {
     switch (msg.type) {
@@ -83,19 +80,14 @@ export function useTcuStore() {
         Object.keys(config).forEach((k) => delete config[k])
         Object.assign(config, msg.data)
         break
+      case 'config_update':
+        Object.assign(config, msg.data)
+        break
       case 'log_status':
         logStatus.value = msg.data
         break
       case 'profile_export':
         openModal('export', '', JSON.stringify(msg.data, null, 2))
-        break
-      case 'gamepad_check':
-        if (gamepadCheckResolve) {
-          if (gamepadCheckTimer) clearTimeout(gamepadCheckTimer)
-          gamepadCheckTimer = null
-          gamepadCheckResolve({ ok: msg.ok, error: msg.error })
-          gamepadCheckResolve = null
-        }
         break
       case 'profile_imported':
         if (msg.ok && msg.data) {
@@ -141,26 +133,6 @@ export function useTcuStore() {
 
   function resetConfig() {
     send({ type: 'reset_config' })
-  }
-
-  function checkGamepad(timeoutMs = 8000): Promise<{ ok: boolean; error: string }> {
-    // Clear any in-flight check
-    if (gamepadCheckTimer) clearTimeout(gamepadCheckTimer)
-    if (gamepadCheckResolve) {
-      gamepadCheckResolve({ ok: false, error: 'cancelled' })
-      gamepadCheckResolve = null
-    }
-    return new Promise((resolve) => {
-      gamepadCheckResolve = resolve
-      gamepadCheckTimer = setTimeout(() => {
-        if (gamepadCheckResolve) {
-          gamepadCheckResolve({ ok: false, error: 'timeout' })
-          gamepadCheckResolve = null
-        }
-        gamepadCheckTimer = null
-      }, timeoutMs)
-      send({ type: 'check_gamepad' })
-    })
   }
 
   function openModal(m: 'export' | 'import', title: string, content: string) {
@@ -269,7 +241,6 @@ export function useTcuStore() {
     send,
     setMode,
     setConfig,
-    checkGamepad,
     applyWebBind,
     applyNetwork,
     resetConfig,

@@ -23,7 +23,6 @@
       (
         {
           COMFORT: '#2563eb',
-          DYNAMIC: '#9333ea',
           RACE: '#16a34a',
           DRIFT: '#dc2626',
           OFFROAD: '#ea580c',

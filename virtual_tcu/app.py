@@ -12,7 +12,6 @@ from virtual_tcu.config.store import ConfigStore
 from virtual_tcu.config.web_bind import format_startup_urls, web_urls
 from virtual_tcu.deps import AIOHTTP_OK
 from virtual_tcu.input import KeyboardOutput
-from virtual_tcu.input.gamepad_output import GamepadOutput
 from virtual_tcu.logic.tcu import TCULogic
 from virtual_tcu.storage.profiles import ProfileStore
 from virtual_tcu.telemetry.logger import TelemetryLogger
@@ -42,8 +41,6 @@ async def main_async(receiver, tcu, config, logger, *, backend_only: bool = Fals
     await asyncio.sleep(0.5)
 
     if backend_only:
-        # Electron shell drives the UI; skip browser-open and last-run marker
-        # so the standalone exe can be relaunched without flicker.
         print(BACKEND_READY_MARKER, flush=True)
     else:
         marker = paths.last_run_marker()
@@ -112,7 +109,7 @@ def banner():
     from virtual_tcu import __version__
 
     print("=" * 66)
-    print(f"  VIRTUAL TCU v{__version__}  —  FH6")
+    print(f"  VIRTUAL TCU v{__version__}  -  FH6")
     print("=" * 66)
 
 
@@ -134,26 +131,7 @@ def main():
     config = ConfigStore()
     profiles = ProfileStore()
     logger = TelemetryLogger()
-    output_mode = config.get("output_mode", "keyboard")
-
-    if output_mode == "gamepad":
-        try:
-            kb = GamepadOutput(config)
-        except RuntimeError as e:
-            print("-" * 66)
-            print("  [!!] GAMEPAD MODE UNAVAILABLE")
-            print(f"  {e}")
-            print("  The ViGEmBus driver is not installed.")
-            print(f"  Download: {GamepadOutput.VIGEMBUS_URL}")
-            print("  After installing and rebooting, gamepad mode will activate")
-            print("  automatically (output_mode is already set to 'gamepad').")
-            print("-" * 66)
-            kb = KeyboardOutput(config)
-            # Do NOT overwrite output_mode — the user explicitly chose gamepad.
-            # Their preference is preserved so it takes effect once the driver
-            # is installed and the backend is restarted.
-    else:
-        kb = KeyboardOutput(config)
+    kb = KeyboardOutput(config)
 
     tcu = TCULogic(kb, profiles, config, logger)
     setup_hotkeys(tcu, config, logger)
@@ -166,7 +144,6 @@ def main():
             f"UDP port {config.get('udp_port', Cfg.UDP_PORT)} bind failed. {receiver.error_msg}"
         )
 
-    # AIOHTTP Windows Event Loop Exception Fix
     if sys.platform == "win32":
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 

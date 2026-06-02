@@ -123,7 +123,7 @@
       </div>
       <div class="bg-tcu-bg-3 relative h-1.5 overflow-hidden rounded-sm">
         <div
-          class="from-mode-comfort via-mode-dynamic to-mode-race h-full rounded-sm bg-linear-to-r transition-[width] duration-150"
+          class="from-mode-comfort via-accent-2 to-mode-race h-full rounded-sm bg-linear-to-r transition-[width] duration-150"
           :style="{ width: sportBarWidth }"
         />
         <div class="bg-tcu-txt-dim/40 absolute top-[-2px] bottom-[-2px] left-[30%] w-0.5" />

@@ -1,4 +1,4 @@
-"""Abstract interface for shift output — keyboard, gamepad, or future backends.
+"""Abstract interface for shift output - keyboard or future backends.
 
 All concrete implementations must provide the full surface below so
 TCULogic (and ReverseHoldDetector) can treat them interchangeably.
@@ -13,28 +13,25 @@ class OutputInterface(ABC):
     @property
     @abstractmethod
     def key_up(self) -> str:
-        """Human-readable label for the upshift action (e.g. 'E' or 'A')."""
+        """Human-readable label for the upshift action, for example ``e``."""
         ...
 
     @property
     @abstractmethod
     def key_down(self) -> str:
-        """Human-readable label for the downshift action (e.g. 'Q' or 'X')."""
+        """Human-readable label for the downshift action, for example ``q``."""
         ...
 
     @abstractmethod
     def is_self_press(self, key: str) -> bool:
         """Return True if *key* was injected by this output within the
-        self-press window.  Used by paddle listeners to ignore echo when
-        the TCU fires a shift and the game also reports a paddle press.
-
-        Gamepad outputs that don't have an echo problem may return False
-        unconditionally."""
+        self-press window. Used by paddle listeners to ignore echo when
+        the TCU fires a shift and the game also reports a paddle press."""
         ...
 
     @abstractmethod
     def shift_up(self):
-        """Trigger an upshift (non-blocking — must return quickly)."""
+        """Trigger an upshift (non-blocking; must return quickly)."""
         ...
 
     @abstractmethod

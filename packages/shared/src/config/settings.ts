@@ -15,6 +15,7 @@ export const FEATURE_TOGGLES: FeatureToggle[] = [
   { key: 'feat_power_curve', i18nKey: 'powerCurve' },
   { key: 'feat_turbo_compensate', i18nKey: 'turboCompensate' },
   { key: 'feat_airtime_lock', i18nKey: 'airtimeLock' },
+  { key: 'feat_landing_recovery', i18nKey: 'landingRecovery' },
   { key: 'feat_transient_lock', i18nKey: 'transientLock' },
   { key: 'feat_drive_style', i18nKey: 'driveStyle' },
   { key: 'feat_discord_rpc', i18nKey: 'discordRpc' },
@@ -26,7 +27,7 @@ export interface SliderDef {
   min: number
   max: number
   step?: number
-  unit?: 'percent' | 'rpm' | 'raw'
+  unit?: 'percent' | 'rpm' | 'raw' | 'ms'
   panel?: 'settings' | 'extras'
   hintKey?: string
 }
@@ -42,7 +43,6 @@ export const SETTING_SLIDERS: SliderDef[] = [
     panel: 'settings',
   },
   { key: 'comfort_up_wot', i18nKey: 'comfortUpWot', min: 50, max: 95, panel: 'settings' },
-  { key: 'dynamic_up_wot', i18nKey: 'dynamicUpWot', min: 60, max: 98, panel: 'settings' },
   {
     key: 'race_up_wot',
     i18nKey: 'raceUpWot',
@@ -64,13 +64,13 @@ export const SETTING_SLIDERS: SliderDef[] = [
   },
   { key: 'comfort_up_idle', i18nKey: 'comfortUpIdle', min: 20, max: 70, panel: 'extras' },
   { key: 'comfort_up_mid', i18nKey: 'comfortUpMid', min: 30, max: 85, panel: 'extras' },
-  { key: 'dynamic_up_idle', i18nKey: 'dynamicUpIdle', min: 30, max: 80, panel: 'extras' },
-  { key: 'dynamic_up_mid', i18nKey: 'dynamicUpMid', min: 40, max: 90, panel: 'extras' },
   { key: 'race_up_idle', i18nKey: 'raceUpIdle', min: 40, max: 90, panel: 'extras' },
   { key: 'race_up_mid', i18nKey: 'raceUpMid', min: 50, max: 95, panel: 'extras' },
   { key: 'kickdown_pedal', i18nKey: 'kickdownPedal', min: 50, max: 100, panel: 'extras' },
   { key: 'kickdown_rpm', i18nKey: 'kickdownRpm', min: 30, max: 80, panel: 'extras' },
   { key: 'coast_down_rpm', i18nKey: 'coastDownRpm', min: 10, max: 50, panel: 'extras' },
+  { key: 'race_coast_rpm', i18nKey: 'raceCoastRpm', min: 10, max: 60, panel: 'extras' },
+  { key: 'offroad_coast_rpm', i18nKey: 'offroadCoastRpm', min: 10, max: 65, panel: 'extras' },
   { key: 'drift_up', i18nKey: 'driftUp', min: 70, max: 99, panel: 'extras' },
   { key: 'drift_down', i18nKey: 'driftDown', min: 40, max: 85, panel: 'extras' },
 ]
@@ -85,38 +85,38 @@ export const SHIFT_KEY_FIELDS = [
   { key: 'shift_key_down', i18nKey: 'shiftKeyDown', placeholder: 'q' },
 ] as const
 
+export const CLUTCH_FIELDS = [{ key: 'clutch_key', i18nKey: 'clutchKey', placeholder: 'shift' }] as const
+
+export const CLUTCH_TIMING_SLIDERS: SliderDef[] = [
+  { key: 'clutch_pre_ms', i18nKey: 'clutchPreMs', min: 0, max: 120, step: 5, unit: 'ms' },
+  {
+    key: 'clutch_overlap_ms',
+    i18nKey: 'clutchOverlapMs',
+    min: 10,
+    max: 180,
+    step: 5,
+    unit: 'ms',
+  },
+  {
+    key: 'clutch_release_ms',
+    i18nKey: 'clutchReleaseMs',
+    min: 0,
+    max: 120,
+    step: 5,
+    unit: 'ms',
+  },
+]
+
 export const NETWORK_FIELDS = [
   { key: 'web_host', i18nKey: 'webHost', placeholder: '0.0.0.0', maxlength: 15 },
   { key: 'web_port', i18nKey: 'webPort', placeholder: '8765', maxlength: 5 },
 ] as const
 
-export const OUTPUT_MODE_OPTIONS = [
-  { value: 'keyboard', i18nKey: 'outputModeKeyboard' },
-  { value: 'gamepad', i18nKey: 'outputModeGamepad' },
-] as const
-
-export const GAMEPAD_BUTTON_OPTIONS = [
-  { value: 'A', label: 'A (底部)' },
-  { value: 'B', label: 'B (右侧)' },
-  { value: 'X', label: 'X (左侧)' },
-  { value: 'Y', label: 'Y (顶部)' },
-  { value: 'LB', label: 'LB (左肩键)' },
-  { value: 'RB', label: 'RB (右肩键)' },
-  { value: 'DPAD_UP', label: '十字键 上' },
-  { value: 'DPAD_DOWN', label: '十字键 下' },
-  { value: 'DPAD_LEFT', label: '十字键 左' },
-  { value: 'DPAD_RIGHT', label: '十字键 右' },
-] as const
-
-export const GAMEPAD_BUTTON_FIELDS = [
-  { key: 'gamepad_shift_up', i18nKey: 'gamepadShiftUp', placeholder: 'B' },
-  { key: 'gamepad_shift_down', i18nKey: 'gamepadShiftDown', placeholder: 'X' },
-] as const
+export const OUTPUT_MODE_OPTIONS = [{ value: 'keyboard', i18nKey: 'outputModeKeyboard' }] as const
 
 export const SETTING_GROUPS: { i18nKey: string; keys: string[]; hintKey?: string }[] = [
   { i18nKey: 'launchControl', keys: ['launch_rpm'] },
   { i18nKey: 'comfort', keys: ['comfort_up_wot'] },
-  { i18nKey: 'dynamic', keys: ['dynamic_up_wot'] },
   { i18nKey: 'race', keys: ['race_up_wot'], hintKey: 'raceFallbackHint' },
   { i18nKey: 'offroad', keys: ['offroad_up_wot', 'offroad_down_rpm'] },
   { i18nKey: 'common', keys: ['brake_thr', 'cornering_yaw'] },

@@ -15,7 +15,6 @@ from virtual_tcu.config.web_bind import (
     resolve_bind,
 )
 from virtual_tcu.deps import WSMsgType, web
-from virtual_tcu.input.gamepad_output import GamepadOutput, check_gamepad_available
 from virtual_tcu.logic.tcu import TCULogic
 from virtual_tcu.telemetry.logger import TelemetryLogger
 from virtual_tcu.telemetry.receiver import TelemetryReceiver
@@ -90,9 +89,7 @@ class WebServer:
                         "defaults": DEFAULTS,
                         "log_status": self._logger.status,
                         "web_urls": network_status(self._config),
-                        "effective_output_mode": (
-                            "gamepad" if isinstance(self._tcu._kb, GamepadOutput) else "keyboard"
-                        ),
+                        "effective_output_mode": "keyboard",
                     },
                 }
             )
@@ -130,6 +127,8 @@ class WebServer:
             self._config.set(key, val)
             if key in ("shift_key_up", "shift_key_down"):
                 self._tcu.refresh_shift_keys()
+            if key == "hud_template":
+                await self._broadcast_json({"type": "config_update", "data": {"hud_template": val}})
         elif t == "set_network":
             await self._apply_network(msg)
         elif t == "set_web_bind":
@@ -139,16 +138,16 @@ class WebServer:
                 "udp_port": self._config.get("udp_port", 5555),
             }
             await self._apply_network(msg)
-        elif t == "check_gamepad":
-            if isinstance(self._tcu._kb, GamepadOutput):
-                ok, error = True, ""
-            else:
-                ok, error = check_gamepad_available()
-            await ws.send_json({"type": "gamepad_check", "ok": ok, "error": error})
         elif t == "reset_config":
             self._config.reset()
             self._tcu.refresh_shift_keys()
             await ws.send_json({"type": "config_reset", "data": self._config.data})
+            await self._broadcast_json(
+                {
+                    "type": "config_update",
+                    "data": {"hud_template": self._config.get("hud_template", "classic")},
+                }
+            )
         elif t == "log_start":
             mode = msg.get("mode", "events")
             self._logger.start(mode)
