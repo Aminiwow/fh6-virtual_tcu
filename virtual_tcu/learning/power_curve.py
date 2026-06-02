@@ -290,12 +290,44 @@ class PowerCurveDetector:
             return powers[0]
         if idx >= len(rpms):
             return powers[-1]
-        left_rpm, right_rpm = rpms[idx - 1], rpms[idx]
-        left_power, right_power = powers[idx - 1], powers[idx]
-        if right_rpm == left_rpm:
-            return left_power
-        t = (rpm - left_rpm) / (right_rpm - left_rpm)
-        return left_power + (right_power - left_power) * t
+
+        # === 三次埃尔米特插值（Cubic Hermite Spline）===
+        # 比线性插值更平滑，消除功率曲线阶跃
+        x0, x1 = rpms[idx - 1], rpms[idx]
+        y0, y1 = powers[idx - 1], powers[idx]
+
+        if x1 == x0:
+            return y0
+
+        # 计算切线斜率（中心差分法）
+        if idx > 1:
+            # 使用前一个点计算左切线
+            m0 = (y1 - powers[idx - 2]) / (x1 - rpms[idx - 2])
+        else:
+            # 边界：使用当前段斜率
+            m0 = (y1 - y0) / (x1 - x0)
+
+        if idx < len(rpms) - 1:
+            # 使用后一个点计算右切线
+            m1 = (powers[idx + 1] - y0) / (rpms[idx + 1] - x0)
+        else:
+            # 边界：使用当前段斜率
+            m1 = (y1 - y0) / (x1 - x0)
+
+        # 归一化参数 t ∈ [0, 1]
+        t = (rpm - x0) / (x1 - x0)
+        t2 = t * t
+        t3 = t2 * t
+
+        # 埃尔米特基函数
+        h00 = 2 * t3 - 3 * t2 + 1      # h0(t)
+        h10 = t3 - 2 * t2 + t           # h1(t)
+        h01 = -2 * t3 + 3 * t2          # h2(t)
+        h11 = t3 - t2                   # h3(t)
+
+        # 插值公式：p(t) = h00*y0 + h10*dx*m0 + h01*y1 + h11*dx*m1
+        dx = x1 - x0
+        return h00 * y0 + h10 * dx * m0 + h01 * y1 + h11 * dx * m1
 
     def power_slope_at_rpm(
         self, car_key: tuple, rpm: float, step_rpm: float = 200.0

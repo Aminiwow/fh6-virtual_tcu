@@ -19,6 +19,7 @@ from virtual_tcu.learning.drive_style import DriveStyleTracker
 from virtual_tcu.learning.gear_ratio import GearRatioCalibrator
 from virtual_tcu.learning.power_curve import PowerCurveDetector
 from virtual_tcu.learning.rev_limiter import RevLimiterDetector
+from virtual_tcu.learning.shift_lag import ShiftLagLearner
 from virtual_tcu.state.graph_buffer import GraphBuffer
 from virtual_tcu.state.session_stats import SessionStats
 from virtual_tcu.state.shift_history import ShiftHistory
@@ -101,6 +102,7 @@ class TCULogic:
         self._yaw_transient = YawTransientDetector()
         self._drive_style = DriveStyleTracker()
         self._rev_limiter = RevLimiterDetector()
+        self._shift_lag = ShiftLagLearner()
         self._shift_history = ShiftHistory()
         self._session_stats = SessionStats()
         self._graph_buffer = GraphBuffer()
@@ -146,6 +148,9 @@ class TCULogic:
         rl = self._rev_limiter.dump(ck)
         if rl is not None:
             profile["rev_limiter"] = rl
+        sl = self._shift_lag.dump(ck)
+        if sl is not None:
+            profile["shift_lag"] = sl
         if profile:
             from datetime import datetime
 
@@ -208,6 +213,8 @@ class TCULogic:
             self._power_curve.load(ck, data["power_curve"])
         if "rev_limiter" in data:
             self._rev_limiter.load(ck, data["rev_limiter"])
+        if "shift_lag" in data:
+            self._shift_lag.load(ck, data["shift_lag"])
 
     def shutdown(self):
         self.save_profiles()
@@ -612,6 +619,9 @@ class TCULogic:
             return
 
         if td.gear != self._prev_gear and td.gear > 0 and self._prev_gear > 0:
+            # 记录档位变化用于延迟学习
+            self._shift_lag.observe_gear_change(td.car_key, td.gear, now)
+
             if self._pending_upshift_gear is not None and td.gear >= self._pending_upshift_gear:
                 pending_gear = self._pending_upshift_gear
                 self._pending_upshift_gear = None
@@ -887,6 +897,10 @@ class TCULogic:
         self._no_downshift_until = max(self._no_downshift_until, now + downshift_lock_s)
         self._we_shifted = True
         self._shift_count += 1
+
+        # 记录换挡指令时刻（用于延迟学习）
+        self._shift_lag.record_shift_command(td.car_key, "UP", td.gear, now)
+
         self._kb.shift_up()
         self._logger.mark_event()
         decision = {"state": state, "reason": sub}
@@ -941,6 +955,10 @@ class TCULogic:
         self._we_shifted = True
         self._shift_count += 1
         self._last_downshift_time = now
+
+        # 记录换挡指令时刻（用于延迟学习）
+        self._shift_lag.record_shift_command(td.car_key, "DOWN", td.gear, now)
+
         self._kb.shift_down()
         self._logger.mark_event()
         self._record_decision("shift_down", td, state=state, reason=sub)
@@ -1083,16 +1101,19 @@ class TCULogic:
         if rise_rate < 800.0:
             return 0.0
 
+        # 使用学习到的换挡延迟（如果可用）
+        learned_lag = self._shift_lag.get_upshift_lag(td.car_key)
+
         if self.mode == Mode.RACE:
-            latency_s = 0.032
+            latency_s = learned_lag  # 使用学习值
             cap_rpm = 320.0
             base_rpm = 45.0
         elif self.mode == Mode.OFFROAD:
-            latency_s = 0.022
+            latency_s = max(0.022, learned_lag * 0.8)  # 越野略快
             cap_rpm = 180.0
             base_rpm = 25.0
         else:
-            latency_s = 0.026
+            latency_s = max(0.026, learned_lag * 0.9)
             cap_rpm = 240.0
             base_rpm = 30.0
 
