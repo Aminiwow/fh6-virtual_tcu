@@ -554,6 +554,30 @@ def test_airtime_detector_reports_landing_window():
     assert detector.landing_recovery(now=100.20)
 
 
+def test_airtime_detector_uses_accel_y_freefall_signal():
+    detector = AirtimeDetector()
+    airborne = telemetry(
+        speed_ms=22.0,
+        accel_y=-8.5,
+        suspension_norm_fl=0.5,
+        suspension_norm_fr=0.5,
+        suspension_norm_rl=0.5,
+        suspension_norm_rr=0.5,
+    )
+    grounded = telemetry(speed_ms=22.0, accel_y=0.0, vel_y=0.0)
+
+    for i in range(3):
+        detector.update(airborne, now=300.0 + i * 0.016)
+
+    assert detector.is_airborne
+
+    detector.update(grounded, now=300.10)
+    detector.update(grounded, now=300.12)
+
+    assert not detector.is_airborne
+    assert detector.just_landed
+
+
 def test_brake_lockup_slip_does_not_count_as_airtime():
     detector = AirtimeDetector()
     locked_brake = telemetry(
@@ -592,6 +616,18 @@ def test_landing_recovery_clears_downshift_lock(tmp_path):
     assert shifted
     assert output.double_down == 1
     assert tcu._no_downshift_until < time.time() + 1.0
+
+
+def test_impact_shortens_post_shift_lock(tmp_path):
+    tcu, _output = make_tcu(tmp_path, "RACE")
+    now = time.time()
+    tcu._lock_until = now + 1.0
+    tcu._speed_history.append(120.0)
+
+    tcu.process(telemetry(current_rpm=4300.0, gear=4, speed_ms=24.0, accel_raw=60))
+
+    assert tcu._lock_until <= time.time() + 0.30
+    assert tcu._no_downshift_until == 0.0
 
 
 def test_offroad_uses_torque_power_down(tmp_path):

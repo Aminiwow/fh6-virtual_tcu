@@ -4,9 +4,11 @@ from virtual_tcu.telemetry.model import Telemetry
 
 
 class DriveStyleTracker:
-    """Continuous 0→1 sport-index for Dynamic mode (Audi Tiptronic feel).
-    Rises fast (τ=0.3s) on aggressive inputs, falls slow (τ=6s) — one
-    calm moment doesn't dump you back to cruise."""
+    """Continuous sport index used by adaptive Comfort/Race behavior.
+
+    Rises quickly on aggressive inputs and fades slowly so one calm moment does
+    not immediately dump the controller back to cruise behavior.
+    """
 
     TAU_UP_S = 0.3
     TAU_DOWN_S = 6.0

@@ -1,22 +1,30 @@
+from __future__ import annotations
+
 import time
+from dataclasses import dataclass
 
 from virtual_tcu.telemetry.model import Telemetry
 
 
+@dataclass(frozen=True)
+class AirState:
+    airborne: bool
+    airborne_started: bool
+    just_landed: bool
+
+
 class AirtimeDetector:
-    """Detects all four wheels off the ground.
+    """Detect jumps using suspension first, then accel/velocity fallbacks."""
 
-    FH6 reports normalized suspension travel directly: 0.0 is max stretch and
-    1.0 is max compression. That is the primary signal. The older accel/slip
-    heuristic remains as a fallback for bad frames or old replay data.
-    """
-
+    FREEFALL_ACCEL_Y = -6.0
+    GROUNDED_ACCEL_Y = -4.0
     LOW_VERTICAL_G_THRESHOLD = 3.0
     SLIP_ALL_WHEELS_THRESHOLD = 1.2
     SLIP_VOTE_THRESHOLD = 1.2
     SUSPENSION_AIRBORNE_THRESHOLD = 0.06
     SUSPENSION_GROUNDED_THRESHOLD = 0.12
     MIN_SPEED_FOR_AIRBORNE = 5.0
+    ACCEL_MIN_SPEED_KMH = 12.0
     VERTICAL_SPEED_AIRBORNE_MS = 2.2
     VERTICAL_SPEED_GROUNDED_MS = 1.3
     FRAMES_TO_ENGAGE = 3
@@ -30,7 +38,7 @@ class AirtimeDetector:
         self._just_landed = False
         self._landing_until = 0.0
 
-    def update(self, td: Telemetry, now: float | None = None) -> bool:
+    def update(self, td: Telemetry, now: float | None = None) -> AirState:
         now = time.time() if now is None else now
         self._just_landed = False
         was_airborne = self._is_airborne
@@ -39,9 +47,10 @@ class AirtimeDetector:
             td.speed_kmh > self.MIN_SPEED_FOR_AIRBORNE
             and max(td.suspension_norm) <= self.SUSPENSION_AIRBORNE_THRESHOLD
         )
-        suspension_grounded = td.speed_kmh <= self.MIN_SPEED_FOR_AIRBORNE or (
-            td.min_suspension_norm >= self.SUSPENSION_GROUNDED_THRESHOLD
-            and abs(td.vel_y) <= self.VERTICAL_SPEED_GROUNDED_MS
+        accel_airborne = (
+            td.speed_kmh > self.ACCEL_MIN_SPEED_KMH
+            and td.accel_y <= self.FREEFALL_ACCEL_Y
+            and td.brake < 0.35
         )
 
         low_g = abs(td.accel_y) < self.LOW_VERTICAL_G_THRESHOLD
@@ -64,21 +73,34 @@ class AirtimeDetector:
             and abs(td.vel_y) >= self.VERTICAL_SPEED_AIRBORNE_MS
             and slip_votes >= 2
         )
-        slip_airborne_allowed = td.brake < 0.25
         fallback_airborne = (
             td.speed_kmh > 20.0
             and low_g
-            and slip_airborne_allowed
+            and td.brake < 0.25
             and (all_spin or slip_votes >= 3)
         )
-        airborne_now = suspension_airborne or vertical_airborne or fallback_airborne
+        airborne_now = (
+            suspension_airborne or accel_airborne or vertical_airborne or fallback_airborne
+        )
+
+        suspension_grounded = td.speed_kmh <= self.MIN_SPEED_FOR_AIRBORNE or (
+            td.min_suspension_norm >= self.SUSPENSION_GROUNDED_THRESHOLD
+            and abs(td.vel_y) <= self.VERTICAL_SPEED_GROUNDED_MS
+        )
+        accel_grounded = (
+            was_airborne
+            and td.accel_y >= self.GROUNDED_ACCEL_Y
+            and not suspension_airborne
+            and abs(td.vel_y) <= self.VERTICAL_SPEED_GROUNDED_MS
+        )
+        grounded_now = suspension_grounded or accel_grounded
 
         if airborne_now:
             self._airborne_streak += 1
             self._grounded_streak = 0
             if self._airborne_streak >= self.FRAMES_TO_ENGAGE:
                 self._is_airborne = True
-        elif suspension_grounded:
+        elif grounded_now:
             self._grounded_streak += 1
             self._airborne_streak = 0
             if self._grounded_streak >= self.FRAMES_TO_DISENGAGE:
@@ -89,7 +111,12 @@ class AirtimeDetector:
         else:
             self._airborne_streak = 0
             self._grounded_streak = 0
-        return self._is_airborne
+
+        return AirState(
+            airborne=self._is_airborne,
+            airborne_started=self._is_airborne and not was_airborne,
+            just_landed=self._just_landed,
+        )
 
     @property
     def is_airborne(self) -> bool:
