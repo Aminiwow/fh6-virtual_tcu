@@ -1,28 +1,19 @@
+import type { HudTemplateId } from '@virtual-tcu/shared/config/hud'
+import type { TelemetrySnapshot } from '@virtual-tcu/shared/types/telemetry'
+import type { DriveMode } from '@virtual-tcu/shared/types/ws'
+import { normalizeHudTemplate } from '@virtual-tcu/shared/config/hud'
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-
-type DriveMode = 'COMFORT' | 'DYNAMIC' | 'RACE' | 'DRIFT' | 'OFFROAD' | 'LEARN' | 'MANUAL'
-
-interface TelemetrySnapshot {
-  gear?: number
-  speed_kmh?: number
-  rpm?: number
-  rpm_max?: number
-  rpm_pct?: number
-  throttle?: number
-  brake?: number
-  tcu_state?: string
-  shift_hint?: string
-  optimal_shift_rpm?: number | null
-  optimal_shift_from_gear?: number | null
-  optimal_shift_to_gear?: number | null
-}
+import { useHudClickThrough } from './hud-click-through'
+import { useHudView } from './hud-view'
+import { useHudWindowSync } from './hud-window-sync'
 
 export function useHudApp() {
   const connected = ref(false)
   const live = ref(false)
   const mode = ref<DriveMode>('COMFORT')
-  const telemetry = ref<TelemetrySnapshot>({})
+  const telemetry = ref<Partial<TelemetrySnapshot>>({})
   const clickThrough = ref(false)
+  const hudTemplate = ref<HudTemplateId>('classic')
 
   let ws: WebSocket | null = null
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null
@@ -30,65 +21,18 @@ export function useHudApp() {
   let cleanupBackendReady: (() => void) | null = null
   let mouseEventsIgnored = false
 
-  const gearLabel = computed(() => {
-    const g = telemetry.value.gear
-    if (g === 0) return 'R'
-    if (g === 11) return 'N'
-    return g != null ? String(g) : '-'
-  })
-
-  const speed = computed(() => Math.round(telemetry.value.speed_kmh ?? 0))
-  const rpm = computed(() => Math.round(telemetry.value.rpm ?? 0))
-  const rpmPct = computed(() => Math.max(0, Math.min(1, telemetry.value.rpm_pct ?? 0)))
   const tcuState = computed(() => telemetry.value.tcu_state ?? 'STANDBY')
-  const hint = computed(() => telemetry.value.shift_hint ?? '')
-  const optimalShiftText = computed(() => {
-    const rpm = telemetry.value.optimal_shift_rpm
-    const from = telemetry.value.optimal_shift_from_gear
-    const to = telemetry.value.optimal_shift_to_gear
-    if (!rpm || !from || !to) return ''
-    return `OPT ${from}→${to} ${Math.round(rpm)} RPM`
-  })
 
-  const modeColor = computed(() => {
-    switch (mode.value) {
-      case 'COMFORT':
-        return '#0891b2'
-      case 'DYNAMIC':
-        return '#65a30d'
-      case 'RACE':
-        return '#e11d48'
-      case 'DRIFT':
-        return '#d97706'
-      case 'OFFROAD':
-        return '#ea580c'
-      case 'LEARN':
-        return '#14b8a6'
-      case 'MANUAL':
-        return '#64748b'
-      default:
-        return '#64748b'
+  const view = useHudView(telemetry, mode, tcuState, clickThrough)
+
+  const shellClass = computed(() => `tpl-${hudTemplate.value}-shell`)
+
+  function applyConfig(config: Record<string, unknown> | undefined) {
+    if (!config) return
+    if ('hud_template' in config) {
+      hudTemplate.value = normalizeHudTemplate(config.hud_template)
     }
-  })
-
-  const rpmBarColor = computed(() => {
-    if (rpmPct.value > 0.92) return '#dc2626'
-    if (rpmPct.value > 0.78) return '#d97706'
-    return '#16a34a'
-  })
-
-  const gearColor = computed(() => {
-    if (tcuState.value === 'SHIFTING') return '#7c3aed'
-    if (gearLabel.value === 'R') return '#d97706'
-    return '#111827'
-  })
-
-  const gearStyle = computed(() => {
-    if (!clickThrough.value) return { color: gearColor.value }
-    if (tcuState.value === 'SHIFTING') return { color: '#ddd6fe' }
-    if (gearLabel.value === 'R') return { color: '#fde68a' }
-    return { color: '#ffffff' }
-  })
+  }
 
   async function connectWs() {
     const fallbackUrl = 'ws://127.0.0.1:8765/ws'
@@ -133,6 +77,7 @@ export function useHudApp() {
           case 'init':
             if (msg.data?.mode) mode.value = msg.data.mode
             if (typeof msg.data?.live === 'boolean') live.value = msg.data.live
+            applyConfig(msg.data?.config)
             break
           case 'telemetry':
             telemetry.value = msg.data ?? {}
@@ -140,6 +85,9 @@ export function useHudApp() {
           case 'state':
             if (msg.data?.mode) mode.value = msg.data.mode
             if (typeof msg.data?.live === 'boolean') live.value = msg.data.live
+            break
+          case 'config_update':
+            applyConfig(msg.data)
             break
         }
       } catch {
@@ -166,25 +114,47 @@ export function useHudApp() {
     window.hud?.setIgnoreMouse(ignore)
   }
 
+  const { syncFromPointer } = useHudClickThrough(clickThrough, applyMouseIgnore)
+
   function syncClickThroughMouse(e: MouseEvent) {
-    if (!clickThrough.value) {
-      applyMouseIgnore(false)
-      return
-    }
-
-    const el = document.elementFromPoint(e.clientX, e.clientY)
-    applyMouseIgnore(!el?.closest('.interactive'))
-  }
-
-  function onMouseLeave() {
-    if (clickThrough.value) applyMouseIgnore(true)
+    syncFromPointer(e)
   }
 
   function toggleClickThrough(e: MouseEvent) {
     clickThrough.value = !clickThrough.value
-    if (clickThrough.value) syncClickThroughMouse(e)
-    else applyMouseIgnore(false)
+    syncFromPointer(e)
   }
+
+  const hudProps = computed(() => ({
+    mode: mode.value,
+    modeColor: view.modeColor.value,
+    tcuState: tcuState.value,
+    clickThrough: clickThrough.value,
+    connected: connected.value,
+    live: live.value,
+    gearLabel: view.gearLabel.value,
+    gearStyle: view.gearStyle.value,
+    speed: view.speed.value,
+    rpm: view.rpm.value,
+    rpmMax: view.rpmMax.value,
+    rpmPct: view.rpmPct.value,
+    rpmBarColor: view.rpmBarColor.value,
+    throttle: view.throttle.value,
+    brake: view.brake.value,
+    shiftAdvice: view.shiftAdvice.value,
+    optimalShiftText: view.optimalShiftText.value,
+    showShiftAdvisor: view.showShiftAdvisor.value,
+    showShiftBanner: view.showShiftBanner.value,
+  }))
+
+  useHudWindowSync({
+    hudTemplate,
+    connected,
+    live,
+    showShiftAdvisor: view.showShiftAdvisor,
+    showShiftBanner: view.showShiftBanner,
+    clickThrough,
+  })
 
   onMounted(() => {
     void connectWs()
@@ -214,22 +184,12 @@ export function useHudApp() {
   return {
     connected,
     live,
-    mode,
-    gearLabel,
-    speed,
-    rpm,
-    rpmPct,
-    tcuState,
-    hint,
-    optimalShiftText,
-    modeColor,
-    rpmBarColor,
-    gearColor,
-    gearStyle,
+    hudTemplate,
+    shellClass,
     clickThrough,
+    hudProps,
     close,
     toggleClickThrough,
     syncClickThroughMouse,
-    onMouseLeave,
   }
 }

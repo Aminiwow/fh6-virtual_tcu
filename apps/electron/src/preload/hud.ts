@@ -13,6 +13,7 @@ const api = {
     return () => ipcRenderer.removeListener('backend:ready', listener)
   },
   close: () => ipcRenderer.invoke('hud:close'),
+  setSize: (width: number, height: number) => ipcRenderer.invoke('hud:set-size', width, height),
   setIgnoreMouse: (ignore: boolean) => ipcRenderer.invoke('hud:set-ignore-mouse', ignore),
   onBackendExit: (cb: (info: unknown) => void) => {
     const listener = (_: unknown, info: unknown) => cb(info)

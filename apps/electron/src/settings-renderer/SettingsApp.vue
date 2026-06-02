@@ -15,6 +15,7 @@
   import SettingsAdvanced from '@virtual-tcu/ui/settings/SettingsAdvanced.vue'
   import SettingsConfig from '@virtual-tcu/ui/settings/SettingsConfig.vue'
   import SettingsHistory from '@virtual-tcu/ui/settings/SettingsHistory.vue'
+  import SettingsHud from '@virtual-tcu/ui/settings/SettingsHud.vue'
   import SettingsOverview from '@virtual-tcu/ui/settings/SettingsOverview.vue'
   import SettingsStats from '@virtual-tcu/ui/settings/SettingsStats.vue'
   import {
@@ -59,6 +60,7 @@
     overview: SpeedometerOutline,
     config: SettingsOutline,
     advanced: RocketOutline,
+    hud: EyeOutline,
     stats: StatsChartOutline,
     history: TimeOutline,
     about: HelpCircleOutline,
@@ -155,6 +157,7 @@
             <SettingsOverview v-if="tab.key === 'overview'" />
             <SettingsConfig v-else-if="tab.key === 'config'" />
             <SettingsAdvanced v-else-if="tab.key === 'advanced'" />
+            <SettingsHud v-else-if="tab.key === 'hud'" />
             <SettingsStats v-else-if="tab.key === 'stats'" />
             <SettingsHistory v-else-if="tab.key === 'history'" />
             <SettingsAbout v-else-if="tab.key === 'about'" :build-version="buildVersion" />

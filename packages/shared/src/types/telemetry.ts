@@ -42,9 +42,11 @@ export interface TelemetrySnapshot {
   throttle: number
   brake: number
   clutch_raw?: number
+  is_race_on?: boolean
   tcu_state: string
   tcu_state_sub: string
   shift_hint?: string
+  shift_advice?: 'up' | 'down' | ''
   power_kw?: number
   torque_nm?: number
   turbo_bar?: number

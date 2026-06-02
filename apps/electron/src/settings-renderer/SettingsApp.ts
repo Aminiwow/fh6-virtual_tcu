@@ -4,9 +4,9 @@ import { useNetworkSettings } from '@virtual-tcu/shared/composables/useNetworkSe
 import { useTcuStore } from '@virtual-tcu/shared/composables/useTcuStore'
 import { DRIVE_MODES } from '@virtual-tcu/shared/config/modes'
 import {
+  CLUTCH_FIELDS,
+  CLUTCH_TIMING_SLIDERS,
   FEATURE_TOGGLES,
-  GAMEPAD_BUTTON_FIELDS,
-  GAMEPAD_BUTTON_OPTIONS,
   HOTKEY_FIELDS,
   OUTPUT_MODE_OPTIONS,
   SETTING_SLIDERS,
@@ -24,7 +24,14 @@ import { useUpdater } from './useUpdater'
 export const GITHUB_REPO_URL = 'https://github.com/Aminiwow/fh6-virtual_tcu'
 export { brandIconUrl }
 
-export type SettingsTabKey = 'overview' | 'config' | 'advanced' | 'stats' | 'history' | 'about'
+export type SettingsTabKey =
+  | 'overview'
+  | 'config'
+  | 'advanced'
+  | 'hud'
+  | 'stats'
+  | 'history'
+  | 'about'
 
 export function useSettingsApp() {
   const { t, locale } = useI18n()
@@ -35,6 +42,7 @@ export function useSettingsApp() {
     { key: 'overview', i18nKey: 'overview' },
     { key: 'config', i18nKey: 'config' },
     { key: 'advanced', i18nKey: 'advanced' },
+    { key: 'hud', i18nKey: 'hud' },
     { key: 'stats', i18nKey: 'stats' },
     { key: 'history', i18nKey: 'history' },
     { key: 'about', i18nKey: 'about' },
@@ -49,9 +57,9 @@ export function useSettingsApp() {
   const featureToggles = FEATURE_TOGGLES
   const hotkeyFields = HOTKEY_FIELDS
   const shiftKeyFields = SHIFT_KEY_FIELDS
+  const clutchFields = CLUTCH_FIELDS
+  const clutchTimingSliders = CLUTCH_TIMING_SLIDERS
   const outputModeOptions = OUTPUT_MODE_OPTIONS
-  const gamepadButtonFields = GAMEPAD_BUTTON_FIELDS
-  const gamepadButtonOptions = GAMEPAD_BUTTON_OPTIONS
 
   const restartBackend = () => {
     const api = (window as unknown as { tcu?: { restartBackend?: () => Promise<void> } }).tcu
@@ -221,9 +229,9 @@ export function useSettingsApp() {
     featureToggles,
     hotkeyFields,
     shiftKeyFields,
+    clutchFields,
+    clutchTimingSliders,
     outputModeOptions,
-    gamepadButtonFields,
-    gamepadButtonOptions,
     networkDraftHost: network.draftHost,
     networkDraftWebPort: network.draftWebPort,
     networkDraftUdpPort: network.draftUdpPort,
@@ -254,16 +262,6 @@ export function useSettingsApp() {
     toggleHud,
     openGithub,
     updater,
-    store: {
-      ...store,
-      installViGEmBus: () => {
-        const api = (
-          window as unknown as {
-            tcu?: { installViGEmBus?: () => Promise<{ ok: boolean; error?: string }> }
-          }
-        ).tcu
-        api?.installViGEmBus?.()
-      },
-    },
+    store,
   }
 }

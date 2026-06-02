@@ -10,6 +10,7 @@ interface HudApi {
   getBackendInfo: () => Promise<{ url: string; wsUrl: string; ready: boolean }>
   onBackendReady: (cb: (info: { wsUrl?: string }) => void) => () => void
   close: () => Promise<void>
+  setSize: (width: number, height: number) => Promise<void>
   setIgnoreMouse: (ignore: boolean) => Promise<void>
   onBackendExit: (cb: (info: unknown) => void) => () => void
 }

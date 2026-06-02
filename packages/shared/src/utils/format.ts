@@ -4,12 +4,14 @@ import type { ConfigMap } from '../types/ws'
 export function sliderUnit(s: Pick<SliderDef, 'unit'>): string {
   if (s.unit === 'rpm') return ' rpm'
   if (s.unit === 'raw') return ''
+  if (s.unit === 'ms') return ' ms'
   return '%'
 }
 
 export function formatSliderValue(key: string, value: number, unit?: SliderDef['unit']): string {
   if (unit === 'rpm' || key === 'launch_rpm') return String(Math.round(value))
   if (unit === 'raw' || key === 'cornering_yaw') return String(Math.round(value))
+  if (unit === 'ms') return `${Math.round(value)} ms`
   return `${Math.round(value)}%`
 }
 
@@ -22,6 +24,13 @@ export function formatDuration(seconds: number): string {
 export function gearDisplay(gear: number, labels: { reverse: string; neutral: string }): string {
   if (gear === 0) return labels.reverse
   if (gear === -1) return labels.neutral
+  return String(gear)
+}
+
+export function formatGearLabel(gear?: number, isRaceOn: unknown = true): string {
+  if (!isRaceOn) return 'N'
+  if (gear === 0) return 'R'
+  if (gear === -1 || gear === undefined || gear === null) return 'N'
   return String(gear)
 }
 
