@@ -1,7 +1,7 @@
 import type { DriveMode } from '../types/ws'
 
 export const MODE_PILL: Record<DriveMode, string> = {
-  COMFORT: 'border-mode-comfort bg-mode-comfort/10 text-mode-comfort',
+  AUTO: 'border-mode-comfort bg-mode-comfort/10 text-mode-comfort',
   RACE: 'border-mode-race bg-mode-race/10 text-mode-race',
   DRIFT: 'border-mode-drift bg-mode-drift/10 text-mode-drift',
   OFFROAD: 'border-mode-offroad bg-mode-offroad/10 text-mode-offroad',
@@ -10,7 +10,7 @@ export const MODE_PILL: Record<DriveMode, string> = {
 }
 
 export const MODE_BTN_ACTIVE: Record<DriveMode, string> = {
-  COMFORT:
+  AUTO:
     'border-mode-comfort text-mode-comfort shadow-[0_0_0_1px_currentColor,0_0_16px_-4px_currentColor]',
   RACE: 'border-mode-race text-mode-race shadow-[0_0_0_1px_currentColor,0_0_16px_-4px_currentColor]',
   DRIFT:

@@ -10,7 +10,7 @@ import { useHudWindowSync } from './hud-window-sync'
 export function useHudApp() {
   const connected = ref(false)
   const live = ref(false)
-  const mode = ref<DriveMode>('COMFORT')
+  const mode = ref<DriveMode>('AUTO')
   const telemetry = ref<Partial<TelemetrySnapshot>>({})
   const clickThrough = ref(false)
   const hudTemplate = ref<HudTemplateId>('classic')

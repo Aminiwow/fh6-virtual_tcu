@@ -9,7 +9,7 @@ const client = new TcuWsClient()
 export function useTcuViewStore() {
   const connected = ref(false)
   const live = ref(false)
-  const mode = ref<DriveMode>('COMFORT')
+  const mode = ref<DriveMode>('AUTO')
   const shiftCount = ref(0)
   const packetsTotal = ref(0)
   const telemetry = ref<TelemetrySnapshot | null>(null)
