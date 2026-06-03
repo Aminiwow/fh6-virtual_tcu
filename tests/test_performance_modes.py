@@ -7,6 +7,7 @@ from virtual_tcu.core.mode import Mode
 from virtual_tcu.detectors.airtime import AirtimeDetector
 from virtual_tcu.input.interface import OutputInterface
 from virtual_tcu.learning.rev_limiter import RevLimiterDetector
+from virtual_tcu.learning.shift_lag import ShiftLagLearner
 from virtual_tcu.logic.tcu import TCULogic
 from virtual_tcu.storage.profiles import ProfileStore
 from virtual_tcu.telemetry.logger import TelemetryLogger
@@ -262,6 +263,61 @@ def test_race_upshift_leads_fast_rpm_rise(tmp_path):
     assert output.up == 1
     assert tcu._tcu_state == "UPSHIFT"
     assert "lead" in tcu._tcu_state_sub
+
+
+def test_power_ceiling_cannot_raise_learned_limiter_ceiling(tmp_path):
+    tcu, _output = make_tcu(tmp_path, "RACE")
+    car_key = (1, 5, 900)
+    tcu._current_car_key = car_key
+    tcu._rev_limiter.load(car_key, 15510.2)
+    tcu._power_curve.max_high_power_rpm = lambda _car_key, min_peak_ratio=0.80: 15500.0
+
+    td = telemetry(
+        engine_max_rpm=16000.0,
+        current_rpm=14500.0,
+        gear=2,
+        accel_raw=255,
+    )
+
+    ceiling_rpm = tcu._upshift_ceiling_pct(td) * td.engine_max_rpm
+
+    assert ceiling_rpm <= 15310.2
+    assert ceiling_rpm < 15480.0
+
+
+def test_shift_lag_accepts_forza_execution_delay_samples():
+    learner = ShiftLagLearner()
+    car_key = (1, 5, 900)
+
+    for idx, lag in enumerate((0.200, 0.220, 0.250), start=1):
+        now = float(idx)
+        learner.record_shift_command(car_key, "UP", 1, now)
+        learner.observe_gear_change(car_key, 2, now + lag)
+
+    assert abs(learner.get_upshift_lag(car_key) - 0.220) < 0.001
+
+
+def test_race_upshift_lead_uses_learned_200ms_lag(tmp_path):
+    tcu, _output = make_tcu(tmp_path, "RACE")
+    car_key = (1, 5, 900)
+    tcu._current_car_key = car_key
+    tcu._rpm_rate_history.extend([3000.0, 3200.0, 3400.0])
+
+    for idx, lag in enumerate((0.200, 0.220, 0.250), start=1):
+        now = float(idx)
+        tcu._shift_lag.record_shift_command(car_key, "UP", 1, now)
+        tcu._shift_lag.observe_gear_change(car_key, 2, now + lag)
+
+    lead_rpm = tcu._upshift_lead_rpm(
+        telemetry(
+            engine_max_rpm=16000.0,
+            current_rpm=14500.0,
+            gear=2,
+            accel_raw=255,
+        )
+    )
+
+    assert lead_rpm >= 600.0
 
 
 def test_race_upshift_uses_power_peak_when_cross_unavailable(tmp_path):

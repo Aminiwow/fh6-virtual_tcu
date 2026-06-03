@@ -1,16 +1,19 @@
-"""自适应换挡延迟学习器
+"""Adaptive shift-lag learner.
 
-测量从发送换挡指令到实际档位变化的延迟，用于优化预判补偿。
+Measures the delay between a TCU command and the telemetry gear change so
+predictive upshift compensation can leave enough room before the limiter.
 """
 
 from collections import deque
 
 
 class ShiftLagLearner:
-    """学习每辆车的换挡延迟时间"""
+    """Learns per-car shift execution latency."""
 
     MAX_SAMPLES = 15
-    VALID_LAG_RANGE = (0.020, 0.150)  # 20-150ms合理范围
+    VALID_LAG_RANGE = (0.020, 0.350)
+    DEFAULT_UPSHIFT_LAG = 0.090
+    DEFAULT_DOWNSHIFT_LAG = 0.035
 
     def __init__(self):
         self._upshift_lags: dict[tuple, deque[float]] = {}
@@ -18,19 +21,32 @@ class ShiftLagLearner:
         self._last_shift_command_time: float | None = None
         self._last_shift_command_gear: int | None = None
         self._last_shift_direction: str | None = None
+        self._last_shift_command_car_key: tuple | None = None
 
     def record_shift_command(self, car_key: tuple, direction: str, gear: int, now: float):
-        """记录换挡指令发出时刻"""
+        """Record when a shift command was sent."""
         self._last_shift_command_time = now
         self._last_shift_command_gear = gear
         self._last_shift_direction = direction
+        self._last_shift_command_car_key = car_key
+
+    def _clear_last_shift_command(self):
+        self._last_shift_command_time = None
+        self._last_shift_command_gear = None
+        self._last_shift_direction = None
+        self._last_shift_command_car_key = None
 
     def observe_gear_change(self, car_key: tuple, new_gear: int, now: float):
-        """检测到档位变化，计算延迟"""
+        """Observe a telemetry gear change and store a valid latency sample."""
         if self._last_shift_command_time is None:
             return
+        if (
+            self._last_shift_command_car_key is not None
+            and self._last_shift_command_car_key != car_key
+        ):
+            self._clear_last_shift_command()
+            return
 
-        # 验证是否是我们发出的换挡
         expected_gear = None
         if self._last_shift_direction == "UP":
             expected_gear = self._last_shift_command_gear + 1
@@ -38,50 +54,44 @@ class ShiftLagLearner:
             expected_gear = self._last_shift_command_gear - 1
 
         if expected_gear != new_gear:
-            return  # 玩家手动换挡或其他原因
+            return
 
         lag = now - self._last_shift_command_time
+        direction = self._last_shift_direction
+        self._clear_last_shift_command()
 
-        # 验证延迟合理性
         if not (self.VALID_LAG_RANGE[0] <= lag <= self.VALID_LAG_RANGE[1]):
             return
 
-        # 存储样本
-        if self._last_shift_direction == "UP":
+        if direction == "UP":
             samples = self._upshift_lags.setdefault(car_key, deque(maxlen=self.MAX_SAMPLES))
         else:
             samples = self._downshift_lags.setdefault(car_key, deque(maxlen=self.MAX_SAMPLES))
 
         samples.append(lag)
 
-        # 清除状态
-        self._last_shift_command_time = None
-        self._last_shift_command_gear = None
-        self._last_shift_direction = None
-
     def get_upshift_lag(self, car_key: tuple) -> float:
-        """获取升档延迟（秒）"""
+        """Return learned upshift latency in seconds."""
         samples = self._upshift_lags.get(car_key, deque())
         if len(samples) < 3:
-            return 0.032  # 默认值
+            return self.DEFAULT_UPSHIFT_LAG
 
-        # 使用中位数（抗离群值）
         sorted_samples = sorted(samples)
-        mid = len(sorted_samples) // 2
-        return sorted_samples[mid]
+        idx = min(len(sorted_samples) - 1, round((len(sorted_samples) - 1) * 0.70))
+        return sorted_samples[idx]
 
     def get_downshift_lag(self, car_key: tuple) -> float:
-        """获取降档延迟（秒）"""
+        """Return learned downshift latency in seconds."""
         samples = self._downshift_lags.get(car_key, deque())
         if len(samples) < 3:
-            return 0.028  # 降档通常更快
+            return self.DEFAULT_DOWNSHIFT_LAG
 
         sorted_samples = sorted(samples)
         mid = len(sorted_samples) // 2
         return sorted_samples[mid]
 
     def dump(self, car_key: tuple) -> dict | None:
-        """导出数据用于持久化"""
+        """Export persisted learning data."""
         up_samples = self._upshift_lags.get(car_key)
         down_samples = self._downshift_lags.get(car_key)
 
@@ -94,7 +104,7 @@ class ShiftLagLearner:
         }
 
     def load(self, car_key: tuple, data: dict):
-        """从持久化数据恢复"""
+        """Restore persisted learning data."""
         if not isinstance(data, dict):
             return
 
@@ -102,6 +112,20 @@ class ShiftLagLearner:
         down_lags = data.get("downshift_lags", [])
 
         if up_lags:
-            self._upshift_lags[car_key] = deque(up_lags, maxlen=self.MAX_SAMPLES)
+            valid_up_lags = [
+                lag
+                for lag in up_lags
+                if isinstance(lag, (int, float))
+                and self.VALID_LAG_RANGE[0] <= lag <= self.VALID_LAG_RANGE[1]
+            ]
+            if valid_up_lags:
+                self._upshift_lags[car_key] = deque(valid_up_lags, maxlen=self.MAX_SAMPLES)
         if down_lags:
-            self._downshift_lags[car_key] = deque(down_lags, maxlen=self.MAX_SAMPLES)
+            valid_down_lags = [
+                lag
+                for lag in down_lags
+                if isinstance(lag, (int, float))
+                and self.VALID_LAG_RANGE[0] <= lag <= self.VALID_LAG_RANGE[1]
+            ]
+            if valid_down_lags:
+                self._downshift_lags[car_key] = deque(valid_down_lags, maxlen=self.MAX_SAMPLES)

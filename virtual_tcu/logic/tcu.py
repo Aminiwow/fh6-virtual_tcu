@@ -1084,13 +1084,16 @@ class TCULogic:
         # the first part of the shift, then clamp it so bad telemetry cannot
         # create an unreachable or overly early target.
         rise_rate = self._rpm_rise_rate()
-        base = 155.0
-        margin = rise_rate * 0.018
+        learned_lag = self._shift_lag.get_upshift_lag(td.car_key)
+        base = 185.0
+        margin = rise_rate * max(0.035, learned_lag * 0.35)
         if td.gear <= 2:
-            margin += 15.0
+            margin += 40.0
+        elif td.gear == 3:
+            margin += 25.0
         if td.throttle > 0.90:
-            margin += 10.0
-        return max(160.0, min(200.0, base + margin))
+            margin += 20.0
+        return max(200.0, min(480.0, base + margin))
 
     def _upshift_lead_rpm(self, td: Telemetry) -> float:
         if td.engine_max_rpm <= 0 or td.throttle < 0.55 or td.brake > 0.05:
@@ -1103,23 +1106,25 @@ class TCULogic:
         learned_lag = self._shift_lag.get_upshift_lag(td.car_key)
 
         if self.mode == Mode.RACE:
-            latency_s = learned_lag  # 使用学习值
-            cap_rpm = 320.0
-            base_rpm = 45.0
+            latency_s = max(0.090, learned_lag)
+            cap_rpm = 620.0
+            base_rpm = 85.0
         elif self.mode == Mode.OFFROAD:
-            latency_s = max(0.022, learned_lag * 0.8)  # 越野略快
-            cap_rpm = 180.0
+            latency_s = max(0.050, learned_lag * 0.8)  # 越野略快
+            cap_rpm = 260.0
             base_rpm = 25.0
         else:
-            latency_s = max(0.026, learned_lag * 0.9)
-            cap_rpm = 240.0
+            latency_s = max(0.060, learned_lag * 0.9)
+            cap_rpm = 320.0
             base_rpm = 30.0
 
         lead = base_rpm + rise_rate * latency_s
         if td.gear <= 2:
-            lead += 25.0
+            lead += 80.0
+        elif td.gear == 3 and self.mode == Mode.RACE:
+            lead += 45.0
         if td.throttle > 0.90:
-            lead += 15.0
+            lead += 35.0 if self.mode == Mode.RACE else 15.0
         return max(0.0, min(cap_rpm, lead))
 
     def _upshift_command_target_pct(
@@ -1998,12 +2003,14 @@ class TCULogic:
 
     def _upshift_ceiling_pct(self, td: Telemetry) -> float:
         learned = self._rev_limiter.effective_redline(td)
+        if learned is not None and td.engine_max_rpm > 0:
+            margin = 200.0
+            if self.mode == Mode.RACE and td.throttle > 0.80:
+                margin = self._race_limiter_margin_rpm(td)
+            return max(0.50, min(0.992, (learned - margin) / td.engine_max_rpm))
         high_power_rpm = self._power_curve.max_high_power_rpm(td.car_key, min_peak_ratio=0.80)
         if high_power_rpm is not None and td.engine_max_rpm > 0:
-            learned = max(learned or 0.0, high_power_rpm)
-        if learned is not None and td.engine_max_rpm > 0:
-            # FIXED: Use smaller safety margin (30 RPM instead of 80) to avoid holding gear after fuel cut
-            return max(0.50, min(0.992, (learned - 30.0) / td.engine_max_rpm))
+            return max(0.50, min(0.975, (high_power_rpm - 200.0) / td.engine_max_rpm))
         # Keep a small safety margin for unknown cars, but no longer cap at 92%;
         # otherwise the limiter learner never gets high-RPM evidence.
         return 0.975
