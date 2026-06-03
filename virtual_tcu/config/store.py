@@ -5,7 +5,7 @@ from virtual_tcu import paths
 from virtual_tcu.config.constants import DEFAULTS
 from virtual_tcu.config.web_bind import valid_bind_host
 
-VALID_MODES = {"AUTO", "RACE", "DRIFT", "OFFROAD", "LEARN", "MANUAL"}
+VALID_MODES = {"RACE", "DRIFT", "OFFROAD", "LEARN", "MANUAL"}
 
 
 class ConfigStore:
@@ -29,8 +29,8 @@ class ConfigStore:
                 try:
                     if k == "current_mode":
                         v = str(v).strip().upper()
-                        if v == "DYNAMIC" or v == "COMFORT":
-                            v = "AUTO"
+                        if v in ("DYNAMIC", "AUTO", "COMFORT"):
+                            v = DEFAULTS["current_mode"]
                         if v not in VALID_MODES:
                             v = DEFAULTS["current_mode"]
                         if v != stored[k]:
@@ -123,8 +123,8 @@ class ConfigStore:
                 return
             elif key == "current_mode":
                 value = str(value).strip().upper()
-                if value == "DYNAMIC" or value == "COMFORT":
-                    value = "AUTO"
+                if value in ("DYNAMIC", "AUTO", "COMFORT"):
+                    value = DEFAULTS["current_mode"]
                 if value not in VALID_MODES:
                     value = DEFAULTS["current_mode"]
             elif key == "output_mode":

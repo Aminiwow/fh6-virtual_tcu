@@ -22,7 +22,6 @@
     return (
       (
         {
-          COMFORT: '#2563eb',
           RACE: '#16a34a',
           DRIFT: '#dc2626',
           OFFROAD: '#ea580c',

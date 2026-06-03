@@ -50,7 +50,6 @@ export function useHudView(
 
   const modeColor = computed(() => {
     const colors: Record<string, string> = {
-      COMFORT: '#38bdf8',
       RACE: '#22c55e',
       DRIFT: '#f43f5e',
       OFFROAD: '#fb923c',

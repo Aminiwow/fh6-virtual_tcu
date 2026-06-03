@@ -42,7 +42,6 @@ export const SETTING_SLIDERS: SliderDef[] = [
     unit: 'rpm',
     panel: 'settings',
   },
-  { key: 'comfort_up_wot', i18nKey: 'comfortUpWot', min: 50, max: 95, panel: 'settings' },
   {
     key: 'race_up_wot',
     i18nKey: 'raceUpWot',
@@ -62,8 +61,6 @@ export const SETTING_SLIDERS: SliderDef[] = [
     unit: 'raw',
     panel: 'settings',
   },
-  { key: 'comfort_up_idle', i18nKey: 'comfortUpIdle', min: 20, max: 70, panel: 'extras' },
-  { key: 'comfort_up_mid', i18nKey: 'comfortUpMid', min: 30, max: 85, panel: 'extras' },
   { key: 'race_up_idle', i18nKey: 'raceUpIdle', min: 40, max: 90, panel: 'extras' },
   { key: 'race_up_mid', i18nKey: 'raceUpMid', min: 50, max: 95, panel: 'extras' },
   { key: 'kickdown_pedal', i18nKey: 'kickdownPedal', min: 50, max: 100, panel: 'extras' },
@@ -116,7 +113,6 @@ export const OUTPUT_MODE_OPTIONS = [{ value: 'keyboard', i18nKey: 'outputModeKey
 
 export const SETTING_GROUPS: { i18nKey: string; keys: string[]; hintKey?: string }[] = [
   { i18nKey: 'launchControl', keys: ['launch_rpm'] },
-  { i18nKey: 'comfort', keys: ['comfort_up_wot'] },
   { i18nKey: 'race', keys: ['race_up_wot'], hintKey: 'raceFallbackHint' },
   { i18nKey: 'offroad', keys: ['offroad_up_wot', 'offroad_down_rpm'] },
   { i18nKey: 'common', keys: ['brake_thr', 'cornering_yaw'] },
