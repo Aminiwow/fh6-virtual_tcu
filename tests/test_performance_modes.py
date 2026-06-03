@@ -222,6 +222,38 @@ def test_race_power_down_skips_when_projected_power_is_worse(tmp_path):
     assert tcu._tcu_state == "RACE"
 
 
+def test_race_power_down_skips_when_landing_near_upshift_point(tmp_path):
+    tcu, _output = make_tcu(tmp_path, "RACE")
+    car_key = (2739, 3, 700)
+    tcu._current_car_key = car_key
+    tcu._calibrator._ratios[car_key] = {3: 5.04345, 4: 3.99845}
+    tcu._calibrator._counts[car_key] = {3: 8, 4: 8}
+    tcu._power_curve.has_power_lookup = lambda _car_key: True
+    tcu._power_curve.power_at_rpm = lambda _car_key, rpm: 900.0 if rpm > 6200 else 650.0
+    tcu._command_upshift_rpm_for_gear = lambda _td, _gear, *, offset: 6515.0
+
+    td = telemetry(
+        car_ordinal=2739,
+        car_class=3,
+        pi=700,
+        engine_max_rpm=8000.0,
+        current_rpm=5100.0,
+        gear=4,
+        speed_ms=45.0,
+        accel_raw=255,
+    )
+
+    target = tcu._target_gear_for_power(
+        td,
+        fallback_pct=0.72,
+        target_bias=0.45,
+        floor_pct=0.60,
+        min_upshift_reserve_rpm=500.0,
+    )
+
+    assert target is None
+
+
 def test_race_upshift_uses_power_cross_before_limiter(tmp_path):
     tcu, output = make_tcu(tmp_path, "RACE")
     car_key = (1, 5, 900)
@@ -263,6 +295,36 @@ def test_race_upshift_leads_fast_rpm_rise(tmp_path):
     assert output.up == 1
     assert tcu._tcu_state == "UPSHIFT"
     assert "lead" in tcu._tcu_state_sub
+
+
+def test_race_fuel_cut_escape_bypasses_upshift_locks(tmp_path):
+    tcu, output = make_tcu(tmp_path, "RACE")
+    car_key = (2739, 3, 700)
+    tcu._current_car_key = car_key
+    tcu._calibrator._ratios[car_key] = {1: 9.93, 2: 6.78}
+    tcu._calibrator._counts[car_key] = {1: 8, 2: 8}
+    tcu._rev_limiter.load(car_key, 7108.7)
+    tcu._power_curve.peak_power_abs_rpm = lambda _car_key: 6200.0
+    tcu._cornering_locked = True
+    tcu._no_upshift_until = time.time() + 5.0
+
+    tcu._mode_race(
+        telemetry(
+            car_ordinal=2739,
+            car_class=3,
+            pi=700,
+            engine_max_rpm=8000.0,
+            current_rpm=6950.0,
+            gear=1,
+            speed_ms=25.0,
+            accel_raw=255,
+            power_w=-400000.0,
+        ),
+        time.time(),
+    )
+
+    assert output.up == 1
+    assert tcu._tcu_state == "FUEL CUT"
 
 
 def test_power_ceiling_cannot_raise_learned_limiter_ceiling(tmp_path):

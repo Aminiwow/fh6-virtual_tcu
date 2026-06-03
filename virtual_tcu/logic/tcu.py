@@ -871,6 +871,7 @@ class TCULogic:
         *,
         downshift_lock_s: float = 1.0,
         decision_extra: dict | None = None,
+        allow_cornering_locked: bool = False,
     ) -> bool:
         if td.gear >= 10:
             return False
@@ -878,7 +879,7 @@ class TCULogic:
             self._tcu_state = "AIRBORNE"
             self._tcu_state_sub = "upshift locked"
             return False
-        if self._cornering_locked:
+        if self._cornering_locked and not allow_cornering_locked:
             return False
         if td.gear <= 2:
             lock_ms = max(lock_ms, Cfg.LOW_GEAR_LOCK_MS)
@@ -910,6 +911,43 @@ class TCULogic:
         if WINSOUND_OK and self._config.get("feat_sound_beep"):
             self._audio_executor.submit(winsound.Beep, 3000, 40)
         return True
+
+    def _fuel_cut_escape_upshift(self, td: Telemetry, now: float) -> bool:
+        if td.gear < 1 or td.gear >= 10 or td.engine_max_rpm <= 0:
+            return False
+        if td.speed_kmh <= Cfg.MIN_SPEED_KMH or td.throttle < 0.80 or td.brake > 0.10:
+            return False
+        if td.power_w > -10000.0:
+            return False
+        if self._pending_upshift_gear is not None:
+            return False
+
+        learned = self._rev_limiter.effective_redline(td)
+        if learned is not None:
+            escape_rpm = max(td.engine_max_rpm * 0.72, learned - 650.0)
+        else:
+            escape_rpm = td.engine_max_rpm * 0.84
+        if td.current_rpm < escape_rpm:
+            return False
+
+        old_no_upshift_until = self._no_upshift_until
+        self._no_upshift_until = min(self._no_upshift_until, now)
+        shifted = self._shift_up(
+            td,
+            260,
+            "FUEL CUT",
+            "escape",
+            downshift_lock_s=0.65,
+            allow_cornering_locked=True,
+            decision_extra={
+                "fuel_cut_escape": True,
+                "escape_rpm": round(escape_rpm, 1),
+                "previous_no_upshift_until_s": round(max(0.0, old_no_upshift_until - now), 3),
+            },
+        )
+        if not shifted:
+            self._no_upshift_until = old_no_upshift_until
+        return shifted
 
     def _shift_down(
         self,
@@ -1530,6 +1568,7 @@ class TCULogic:
         fallback_pct: float,
         target_bias: float,
         floor_pct: float,
+        min_upshift_reserve_rpm: float = 0.0,
     ) -> tuple[int, float] | None:
         if td.engine_max_rpm <= 0 or td.gear <= 1:
             return None
@@ -1551,6 +1590,13 @@ class TCULogic:
                 continue
             if not self._projected_power_is_better(td, projected):
                 continue
+            if min_upshift_reserve_rpm > 0.0:
+                upshift_rpm = self._command_upshift_rpm_for_gear(td, gear, offset=0.03)
+                if (
+                    upshift_rpm is not None
+                    and projected >= upshift_rpm - min_upshift_reserve_rpm
+                ):
+                    continue
 
             below_floor_penalty = max(0.0, floor_rpm - projected) * 1.5
             score = abs(projected - target_rpm) + below_floor_penalty
@@ -1559,6 +1605,24 @@ class TCULogic:
                 best_score = score
 
         return best
+
+    def _command_upshift_rpm_for_gear(
+        self,
+        td: Telemetry,
+        gear: int,
+        *,
+        offset: float,
+    ) -> float | None:
+        if td.engine_max_rpm <= 0 or gear < 1 or gear >= 10:
+            return None
+        guide_td = self._shift_guide_td(td, gear)
+        target = self._learned_power_upshift_target_pct(guide_td, offset)
+        if target is None:
+            return None
+        target_pct, source = target
+        base_pct = min(target_pct, self._upshift_ceiling_pct(guide_td))
+        command_pct, _source = self._upshift_command_target_pct(guide_td, base_pct, source)
+        return command_pct * td.engine_max_rpm
 
     def _track_power_demand_downshift(
         self,
@@ -1578,6 +1642,7 @@ class TCULogic:
         cascade_lock_s: float = 0.35,
         upshift_lock_s: float = 0.70,
         block_spin: bool = True,
+        min_upshift_reserve_rpm: float = 0.0,
     ) -> bool:
         if td.throttle < min_throttle or td.brake > 0.08:
             return False
@@ -1593,6 +1658,7 @@ class TCULogic:
             fallback_pct=fallback_pct,
             target_bias=target_bias,
             floor_pct=floor_pct,
+            min_upshift_reserve_rpm=min_upshift_reserve_rpm,
         )
         if target is None:
             return False
@@ -1666,6 +1732,7 @@ class TCULogic:
                 allow_skip=True,
                 cascade_lock_s=0.28,
                 upshift_lock_s=0.65,
+                min_upshift_reserve_rpm=500.0,
             )
 
         if mode == Mode.OFFROAD:
@@ -1971,8 +2038,10 @@ class TCULogic:
             return min(max(best_pct, search_start), search_end), "falling power"
 
         # No power crossing before the usable ceiling: hold the gear for max
-        # acceleration, then let the ceiling guard force the shift.
-        return search_end, "power ceiling"
+        # acceleration, but do not sit exactly on the fuel-cut guard.
+        ceiling_guard_rpm = 120.0 if self.mode == Mode.RACE else 80.0
+        ceiling_guard_pct = ceiling_guard_rpm / td.engine_max_rpm
+        return max(search_start, search_end - ceiling_guard_pct), "power ceiling"
 
     def _optimal_shift_snapshot(self, td: Telemetry) -> dict:
         empty = {
@@ -2305,6 +2374,9 @@ class TCULogic:
             self._shift_down(td, 350, "ANTI-STALL", "engine save")
             return
 
+        if self._fuel_cut_escape_upshift(td, now):
+            return
+
         blocker = self._blocked_by_transient()
         if blocker is not None:
             self._tcu_state = blocker
@@ -2350,6 +2422,7 @@ class TCULogic:
             allow_skip=True,
             cascade_lock_s=0.35,
             upshift_lock_s=0.70,
+            min_upshift_reserve_rpm=500.0,
         ):
             return
 
