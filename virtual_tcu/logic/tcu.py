@@ -2012,7 +2012,8 @@ class TCULogic:
         if high_power_rpm is not None and td.engine_max_rpm > 0:
             learned = max(learned or 0.0, high_power_rpm)
         if learned is not None and td.engine_max_rpm > 0:
-            return max(0.50, min(0.992, (learned - 80.0) / td.engine_max_rpm))
+            # FIXED: Use smaller safety margin (30 RPM instead of 80) to avoid holding gear after fuel cut
+            return max(0.50, min(0.992, (learned - 30.0) / td.engine_max_rpm))
         # Keep a small safety margin for unknown cars, but no longer cap at 92%;
         # otherwise the limiter learner never gets high-RPM evidence.
         return 0.975
@@ -2058,9 +2059,8 @@ class TCULogic:
         if td.rpm_pct > 0.85:
             return False
 
-        # Use learned turbo threshold instead of hardcoded 0.7
-        threshold = self._turbo_characteristics.get_hold_threshold(td.car_key)
-        if self._turbo_bar < td.boost_raw * threshold:
+        # Use original fixed threshold (0.7) - learning disabled for stability
+        if self._turbo_bar < td.boost_raw * 0.7:
             return True
         return False
 
@@ -2094,15 +2094,6 @@ class TCULogic:
         else:
             self._turbo_bar -= 4.2 * dt * (self._turbo_bar - target)
         self._turbo_bar = max(0.0, min(self._turbo_bar, 1.8))
-
-        # Learn turbo spool characteristics
-        if td.throttle > 0.7 and td.boost_raw > 0.3:
-            boost_delta = abs(td.boost_raw - self._prev_boost_raw)
-            if boost_delta > 0.15 and dt > 0:
-                self._turbo_characteristics.observe_turbo_spool(
-                    td.car_key, td.gear, boost_delta, dt
-                )
-        self._prev_boost_raw = td.boost_raw
 
     def _update_attitude(self, td: Telemetry):
         speed = td.speed_effective_ms
@@ -2330,7 +2321,8 @@ class TCULogic:
         max_slip = td.max_combined_slip
 
         # Low grip detection: high rumble OR high slip
-        is_low_grip = (surface_rumble > 0.5) or (max_slip > 1.5)
+        # Changed to more conservative thresholds to avoid false positives
+        is_low_grip = (surface_rumble > 0.7) and (max_slip > 2.5)
 
         # Determine which sub-mode to use
         if is_low_grip:
@@ -2432,10 +2424,8 @@ class TCULogic:
         ):
             return
 
-        # Apply grip-adaptive offset for traction-limited scenarios
-        grip_offset = self._grip_adaptive_offset(td)
-        total_offset = 0.03 + grip_offset
-        if self._track_upshift_in_band(td, now, offset=total_offset, downshift_lock_s=0.55):
+        # Use standard offset for RACE mode
+        if self._track_upshift_in_band(td, now, offset=0.03, downshift_lock_s=0.55):
             return
 
         self._tcu_state = "RACE"
