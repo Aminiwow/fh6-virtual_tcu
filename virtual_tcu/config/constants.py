@@ -69,7 +69,7 @@ DEFAULTS = {
     "clutch_overlap_ms": 55,
     "clutch_release_ms": 25,
     "hud_template": "classic",
-    "current_mode": "COMFORT",
+    "current_mode": "AUTO",
     "web_host": "0.0.0.0",
     "web_port": 8765,
     "udp_port": 5555,

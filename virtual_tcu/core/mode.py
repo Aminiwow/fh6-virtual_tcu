@@ -2,7 +2,7 @@ from enum import Enum
 
 
 class Mode(Enum):
-    COMFORT = "COMFORT"
+    AUTO = "AUTO"
     RACE = "RACE"
     DRIFT = "DRIFT"
     OFFROAD = "OFFROAD"
@@ -11,7 +11,7 @@ class Mode(Enum):
 
 
 MODE_ORDER = [
-    Mode.COMFORT,
+    Mode.AUTO,
     Mode.RACE,
     Mode.DRIFT,
     Mode.OFFROAD,

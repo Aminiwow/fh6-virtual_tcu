@@ -1,6 +1,6 @@
 import type { LogStatus, SessionStats, ShiftHistoryItem, TelemetrySnapshot } from './telemetry'
 
-export type DriveMode = 'COMFORT' | 'RACE' | 'DRIFT' | 'OFFROAD' | 'LEARN' | 'MANUAL'
+export type DriveMode = 'AUTO' | 'RACE' | 'DRIFT' | 'OFFROAD' | 'LEARN' | 'MANUAL'
 
 export type ConfigMap = Record<string, string | number | boolean>
 

@@ -20,6 +20,7 @@ from virtual_tcu.learning.gear_ratio import GearRatioCalibrator
 from virtual_tcu.learning.power_curve import PowerCurveDetector
 from virtual_tcu.learning.rev_limiter import RevLimiterDetector
 from virtual_tcu.learning.shift_lag import ShiftLagLearner
+from virtual_tcu.learning.turbo_characteristics import TurboCharacteristics
 from virtual_tcu.state.graph_buffer import GraphBuffer
 from virtual_tcu.state.session_stats import SessionStats
 from virtual_tcu.state.shift_history import ShiftHistory
@@ -55,12 +56,12 @@ class TCULogic:
         self._discord_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="TCU_Discord")
 
         try:
-            self._mode = Mode(str(config.get("current_mode", "COMFORT")).upper())
+            self._mode = Mode(str(config.get("current_mode", "AUTO")).upper())
         except (ValueError, KeyError):
-            self._mode = Mode.COMFORT
+            self._mode = Mode.AUTO
 
         self._last_auto_mode = (
-            self._mode if self._mode not in (Mode.LEARN, Mode.MANUAL) else Mode.COMFORT
+            self._mode if self._mode not in (Mode.LEARN, Mode.MANUAL) else Mode.AUTO
         )
         self._last_processed_mode = self._mode
 
@@ -70,6 +71,7 @@ class TCULogic:
         self._peak_rpm = 0.0
         self._peak_g = 0.0
         self._turbo_bar = 0.0
+        self._prev_boost_raw = 0.0
 
         self._brake_history = deque(maxlen=10)
         self._throttle_history = deque(maxlen=6)
@@ -103,6 +105,7 @@ class TCULogic:
         self._drive_style = DriveStyleTracker()
         self._rev_limiter = RevLimiterDetector()
         self._shift_lag = ShiftLagLearner()
+        self._turbo_characteristics = TurboCharacteristics()
         self._shift_history = ShiftHistory()
         self._session_stats = SessionStats()
         self._graph_buffer = GraphBuffer()
@@ -151,6 +154,9 @@ class TCULogic:
         sl = self._shift_lag.dump(ck)
         if sl is not None:
             profile["shift_lag"] = sl
+        tc = self._turbo_characteristics.dump(ck)
+        if tc is not None:
+            profile["turbo_characteristics"] = tc
         if profile:
             from datetime import datetime
 
@@ -215,6 +221,8 @@ class TCULogic:
             self._rev_limiter.load(ck, data["rev_limiter"])
         if "shift_lag" in data:
             self._shift_lag.load(ck, data["shift_lag"])
+        if "turbo_characteristics" in data:
+            self._turbo_characteristics.load(ck, data["turbo_characteristics"])
 
     def shutdown(self):
         self.save_profiles()
@@ -829,8 +837,8 @@ class TCULogic:
             self._tcu_state_sub = "upshift locked"
 
         m = self.mode
-        if m == Mode.COMFORT:
-            self._mode_comfort(td, now)
+        if m == Mode.AUTO:
+            self._mode_auto(td, now)
         elif m == Mode.RACE:
             self._mode_race(td, now)
         elif m == Mode.DRIFT:
@@ -2049,9 +2057,31 @@ class TCULogic:
             return False
         if td.rpm_pct > 0.85:
             return False
-        if self._turbo_bar < td.boost_raw * 0.7:
+
+        # Use learned turbo threshold instead of hardcoded 0.7
+        threshold = self._turbo_characteristics.get_hold_threshold(td.car_key)
+        if self._turbo_bar < td.boost_raw * threshold:
             return True
         return False
+
+    def _grip_adaptive_offset(self, td: Telemetry) -> float:
+        """
+        Calculate shift point offset adjustment based on grip level.
+        Returns negative offset for low grip (shift earlier to reduce wheelspin).
+        Returns 0.0 for normal grip.
+        """
+        slip = td.max_combined_slip
+
+        if slip > 1.8:  # Severe wheelspin
+            return -0.08
+        elif slip > 1.5:  # Moderate wheelspin
+            return -0.05
+        elif slip > 1.2:  # Light wheelspin
+            return -0.03
+        elif slip > 0.8:  # Marginal grip
+            return -0.01
+
+        return 0.0  # Normal grip, no adjustment
 
     def _update_turbo(self, td: Telemetry, dt: float):
         if 0.01 < td.boost_raw < 5.0:
@@ -2064,6 +2094,15 @@ class TCULogic:
         else:
             self._turbo_bar -= 4.2 * dt * (self._turbo_bar - target)
         self._turbo_bar = max(0.0, min(self._turbo_bar, 1.8))
+
+        # Learn turbo spool characteristics
+        if td.throttle > 0.7 and td.boost_raw > 0.3:
+            boost_delta = abs(td.boost_raw - self._prev_boost_raw)
+            if boost_delta > 0.15 and dt > 0:
+                self._turbo_characteristics.observe_turbo_spool(
+                    td.car_key, td.gear, boost_delta, dt
+                )
+        self._prev_boost_raw = td.boost_raw
 
     def _update_attitude(self, td: Telemetry):
         speed = td.speed_effective_ms
@@ -2284,101 +2323,26 @@ class TCULogic:
         new = sum(recent[-3:]) / 3
         return (new - old) < 0.5
 
-    def _mode_comfort(self, td: Telemetry, now: float):
-        thr = td.throttle
-        brake_thr = self._config.get("brake_thr", 35) / 100
-        kd_pedal = self._config.get("kickdown_pedal", 78) / 100
-        kd_rpm = self._config.get("kickdown_rpm", 50) / 100
-        coast_rpm = self._config.get("coast_down_rpm", 28) / 100
+    def _mode_auto(self, td: Telemetry, now: float):
+        """AUTO mode: automatically switch between RACE and OFFROAD based on surface grip."""
+        # Detect surface type using rumble and slip
+        surface_rumble = getattr(td, 'surface_rumble', 0.0)
+        max_slip = td.max_combined_slip
 
-        if (
-            td.current_rpm < Cfg.ANTI_STALL_RPM
-            and td.gear > 1
-            and thr < 0.10
-            and td.speed_kmh < 20.0
-        ):
-            self._shift_down(td, 350, "ANTI-STALL", "engine save")
-            return
+        # Low grip detection: high rumble OR high slip
+        is_low_grip = (surface_rumble > 0.5) or (max_slip > 1.5)
 
-        if self._should_brake_downshift(td, brake_thr) and td.gear > 1 and td.speed_kmh > 35.0:
-            self._shift_down(
-                td,
-                300,
-                "BRAKE DOWN",
-                "panic brake" if self._config.get("feat_brake_curve") else "",
-            )
-            self._no_upshift_until = now + 1.0
-            return
-
-        ramp = self._throttle_ramp_up()
-        if (
-            ramp > 0.50
-            and thr > 0.80
-            and td.rpm_pct < 0.65
-            and td.gear > 2
-            and td.speed_kmh > 40.0
-            and now >= self._no_predictive_until
-        ):
-            self._shift_down(td, 450, "PREDICTIVE", "hard accel")
-            self._no_upshift_until = now + 1.2
-            return
-
-        kd_thr = self._kickdown_pedal_threshold(td, kd_pedal)
-        if thr >= kd_thr and td.rpm_pct < kd_rpm and td.gear > 2:
-            self._shift_down(td, 500, "KICKDOWN", "demand power")
-            self._no_upshift_until = now + 1.5
-            return
-
-        if self._wheelspin_upshift_now(td) and td.speed_kmh > 15.0:
-            self._shift_up(td, 400, "WHEELSPIN", "traction save")
-            return
-
-        if self._should_engine_brake(td):
-            self._shift_down(td, 600, "ENGINE BRAKE", "descent")
-            self._no_upshift_until = now + 2.0
-            return
-
-        if (
-            thr > 0.20
-            and td.brake < 0.05
-            and now >= self._no_upshift_until
-            and not self._turbo_lag_block_upshift(td)
-        ):
-            up_pct = self._curve(
-                thr,
-                self._config.get("comfort_up_idle", 40) / 100,
-                self._config.get("comfort_up_mid", 58) / 100,
-                self._config.get("comfort_up_wot", 82) / 100,
-            )
-            if td.rpm_pct >= up_pct:
-                self._shift_up(td, 350, "UPSHIFT", "accelerating")
-                return
-
-        if (
-            thr > 0.05
-            and thr < 0.55
-            and td.brake < 0.05
-            and td.gear >= 3
-            and self._speed_stable(3.0)
-            and td.rpm_pct > 0.30
-            and abs(td.ang_vel_z) < 0.15
-        ):
-            self._shift_up(td, 2500, "CRUISE EFF", "saving fuel")
-            return
-
-        if (
-            thr < 0.05
-            and td.brake < 0.05
-            and td.rpm_pct < coast_rpm
-            and td.gear > 1
-            and td.speed_kmh > 50.0
-            and abs(td.ang_vel_z) < 0.20
-        ):
-            self._shift_down(td, 400, "COAST DOWN", "engine brake")
-            return
-
-        self._tcu_state = "CRUISING"
-        self._tcu_state_sub = ""
+        # Determine which sub-mode to use
+        if is_low_grip:
+            # Use OFFROAD logic for low grip surfaces
+            self._tcu_state = "AUTO→OFF"
+            self._tcu_state_sub = "low grip"
+            self._mode_offroad(td, now)
+        else:
+            # Use RACE logic for high grip surfaces
+            self._tcu_state = "AUTO→RACE"
+            self._tcu_state_sub = "high grip"
+            self._mode_race(td, now)
 
     def _mode_race(self, td: Telemetry, now: float):
         thr = td.throttle
@@ -2468,7 +2432,10 @@ class TCULogic:
         ):
             return
 
-        if self._track_upshift_in_band(td, now, offset=0.03, downshift_lock_s=0.55):
+        # Apply grip-adaptive offset for traction-limited scenarios
+        grip_offset = self._grip_adaptive_offset(td)
+        total_offset = 0.03 + grip_offset
+        if self._track_upshift_in_band(td, now, offset=total_offset, downshift_lock_s=0.55):
             return
 
         self._tcu_state = "RACE"

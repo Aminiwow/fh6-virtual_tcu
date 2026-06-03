@@ -6,7 +6,7 @@ export interface ModeDef {
 }
 
 export const DRIVE_MODES: ModeDef[] = [
-  { id: 'COMFORT', i18nKey: 'comfort' },
+  { id: 'AUTO', i18nKey: 'auto' },
   { id: 'RACE', i18nKey: 'race' },
   { id: 'DRIFT', i18nKey: 'drift' },
   { id: 'OFFROAD', i18nKey: 'offroad' },
