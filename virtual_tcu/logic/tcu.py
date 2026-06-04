@@ -462,7 +462,12 @@ class TCULogic:
             return None
 
         target_pct, source = target
-        target_pct = min(target_pct, self._upshift_ceiling_pct(guide_td))
+        target_pct = self._upshift_base_target_pct(
+            guide_td,
+            target_pct,
+            source,
+            self._upshift_ceiling_pct(guide_td),
+        )
         upshift_rpm = target_pct * td.engine_max_rpm
         upshift_speed = self._calibrator.speed_for_rpm(td.car_key, gear, upshift_rpm)
         landing_rpm = upshift_rpm * ratios[gear + 1] / ratios[gear]
@@ -1207,6 +1212,67 @@ class TCULogic:
         applied_lead_rpm = max(0.0, target_rpm - command_pct * td.engine_max_rpm)
         return command_pct, f"{source} lead -{applied_lead_rpm:.0f}"
 
+    def _upshift_base_target_pct(
+        self,
+        td: Telemetry,
+        target_pct: float,
+        source: str,
+        ceiling_pct: float,
+    ) -> float:
+        conservative = min(target_pct, ceiling_pct)
+        if source != "power ceiling":
+            return conservative
+
+        dynamic = self._dynamic_power_ceiling_target_pct(td, conservative)
+        if dynamic is None:
+            return conservative
+        return max(conservative, min(dynamic, 0.992))
+
+    def _dynamic_power_ceiling_target_pct(
+        self,
+        td: Telemetry,
+        conservative_pct: float,
+    ) -> float | None:
+        if self.mode != Mode.RACE or td.engine_max_rpm <= 0 or td.throttle < 0.80:
+            return None
+        if td.brake > 0.05 or td.gear < 1 or td.gear >= 10:
+            return None
+
+        learned_redline = self._rev_limiter.effective_redline(td)
+        if learned_redline is None:
+            return None
+
+        current_ratio = self._calibrator.ratio_for_gear(td.car_key, td.gear)
+        next_ratio = self._calibrator.ratio_for_gear(td.car_key, td.gear + 1)
+        if not current_ratio or not next_ratio:
+            return None
+
+        target_rpm = conservative_pct * td.engine_max_rpm
+        next_rpm = target_rpm * next_ratio / current_ratio
+        current_power = self._power_curve.power_at_rpm(td.car_key, target_rpm)
+        next_power = self._power_curve.power_at_rpm(td.car_key, next_rpm)
+        if current_power is None or next_power is None or current_power <= 1.0:
+            return None
+
+        landing_power_ratio = max(0.0, min(1.25, next_power / current_power))
+        if landing_power_ratio >= 0.86:
+            return None
+
+        # If the next gear lands far below current-gear power, the fastest
+        # move is usually to hold until close to the learned safe redline.
+        pull_bias = (0.86 - landing_power_ratio) / (0.86 - 0.55)
+        pull_bias = max(0.0, min(1.0, pull_bias))
+
+        redline_margin = max(55.0, min(140.0, self._race_limiter_margin_rpm(td) * 0.25))
+        safe_redline_pct = max(
+            conservative_pct,
+            min(0.992, (learned_redline - redline_margin) / td.engine_max_rpm),
+        )
+        if safe_redline_pct <= conservative_pct:
+            return None
+
+        return conservative_pct + (safe_redline_pct - conservative_pct) * pull_bias
+
     def _record_decision(self, event: str, td: Telemetry, **extra):
         data = {
             "event": event,
@@ -1238,7 +1304,12 @@ class TCULogic:
         if offset is not None:
             performance_target = self._performance_upshift_target_pct(td, offset)
             if performance_target is not None:
-                target_pct = min(performance_target[0], self._upshift_ceiling_pct(td))
+                target_pct = self._upshift_base_target_pct(
+                    td,
+                    performance_target[0],
+                    performance_target[1],
+                    self._upshift_ceiling_pct(td),
+                )
             elif self.mode == Mode.RACE:
                 target_pct, _source = self._race_upshift_target_pct(td)
 
@@ -1637,7 +1708,12 @@ class TCULogic:
         if target is None:
             return None
         target_pct, source = target
-        base_pct = min(target_pct, self._upshift_ceiling_pct(guide_td))
+        base_pct = self._upshift_base_target_pct(
+            guide_td,
+            target_pct,
+            source,
+            self._upshift_ceiling_pct(guide_td),
+        )
         command_pct, _source = self._upshift_command_target_pct(guide_td, base_pct, source)
         return command_pct * td.engine_max_rpm
 
@@ -1849,7 +1925,12 @@ class TCULogic:
         if performance_target is not None:
             strategy_pct, strategy_source = performance_target
             ceiling_pct = self._upshift_ceiling_pct(td)
-            base_pct = min(strategy_pct, ceiling_pct)
+            base_pct = self._upshift_base_target_pct(
+                td,
+                strategy_pct,
+                strategy_source,
+                ceiling_pct,
+            )
             target_pct, source = self._upshift_command_target_pct(td, base_pct, strategy_source)
             if td.rpm_pct < target_pct:
                 return False
@@ -1905,7 +1986,7 @@ class TCULogic:
             blend_fallback=not mature_curve,
         )
         ceiling_pct = self._upshift_ceiling_pct(td)
-        base_pct = min(strategy_pct, ceiling_pct)
+        base_pct = self._upshift_base_target_pct(td, strategy_pct, "in band", ceiling_pct)
         target_pct, source = self._upshift_command_target_pct(td, base_pct, "in band")
         if td.rpm_pct < target_pct:
             return False
@@ -2077,7 +2158,12 @@ class TCULogic:
             return empty
 
         target_pct, source = target
-        target_pct = min(target_pct, self._upshift_ceiling_pct(td))
+        target_pct = self._upshift_base_target_pct(
+            td,
+            target_pct,
+            source,
+            self._upshift_ceiling_pct(td),
+        )
         target_rpm = target_pct * td.engine_max_rpm
         return {
             "optimal_shift_rpm": round(target_rpm),

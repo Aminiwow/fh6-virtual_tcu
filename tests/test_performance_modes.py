@@ -347,6 +347,56 @@ def test_power_ceiling_cannot_raise_learned_limiter_ceiling(tmp_path):
     assert ceiling_rpm < 15480.0
 
 
+def test_power_ceiling_holds_gear_when_landing_power_is_poor(tmp_path):
+    tcu, _output = make_tcu(tmp_path, "RACE")
+    car_key = (1, 5, 900)
+    tcu._current_car_key = car_key
+    tcu._rev_limiter.load(car_key, 7499.0)
+    tcu._calibrator._ratios[car_key] = {1: 5.70, 2: 3.78}
+    tcu._calibrator._counts[car_key] = {1: 8, 2: 8}
+    tcu._rpm_rate_history.extend([3200.0, 3400.0, 3600.0])
+    tcu._power_curve.power_at_rpm = lambda _car_key, rpm: 680.0 if rpm < 5000.0 else 1740.0
+
+    td = telemetry(
+        car_ordinal=1,
+        car_class=5,
+        pi=900,
+        engine_max_rpm=8000.0,
+        current_rpm=6900.0,
+        gear=1,
+        accel_raw=255,
+    )
+
+    base_pct = tcu._upshift_base_target_pct(td, 0.884, "power ceiling", 0.900)
+    command_pct, source = tcu._upshift_command_target_pct(td, base_pct, "power ceiling")
+
+    assert base_pct * td.engine_max_rpm > 7300.0
+    assert command_pct * td.engine_max_rpm > 7100.0
+    assert "lead" in source
+
+
+def test_power_ceiling_stays_conservative_when_landing_power_is_close(tmp_path):
+    tcu, _output = make_tcu(tmp_path, "RACE")
+    car_key = (1, 5, 900)
+    tcu._current_car_key = car_key
+    tcu._rev_limiter.load(car_key, 7499.0)
+    tcu._calibrator._ratios[car_key] = {3: 2.70, 4: 2.25}
+    tcu._calibrator._counts[car_key] = {3: 8, 4: 8}
+    tcu._power_curve.power_at_rpm = lambda _car_key, _rpm: 1500.0
+
+    td = telemetry(
+        car_ordinal=1,
+        car_class=5,
+        pi=900,
+        engine_max_rpm=8000.0,
+        current_rpm=6900.0,
+        gear=3,
+        accel_raw=255,
+    )
+
+    assert tcu._upshift_base_target_pct(td, 0.884, "power ceiling", 0.900) == 0.884
+
+
 def test_shift_lag_accepts_forza_execution_delay_samples():
     learner = ShiftLagLearner()
     car_key = (1, 5, 900)
