@@ -91,6 +91,7 @@ class TCULogic:
         self._pending_upshift_until = 0.0
         self._last_saved_profile_at = 0.0
         self._last_profile_signature: tuple | None = None
+        self._last_valid_telemetry: Telemetry | None = None
 
         self._reverse_lock_until = 0.0
         self._current_car_key: tuple | None = None
@@ -319,7 +320,13 @@ class TCULogic:
 
     def snapshot(self, td: Telemetry | None) -> dict:
         with self._data_lock:
-            if td is None:
+            snapshot_td = td if td is not None and not self._invalid_drive_packet(td) else None
+            using_cached_car = False
+            if snapshot_td is None and self._last_valid_telemetry is not None:
+                snapshot_td = self._last_valid_telemetry
+                using_cached_car = True
+
+            if snapshot_td is None:
                 return {
                     "gear": -1,
                     "speed_kmh": 0,
@@ -365,9 +372,16 @@ class TCULogic:
                     "optimal_shift_to_gear": None,
                     "optimal_shift_source": "",
                     "shift_guide": self._empty_shift_guide(),
+                    "car_ordinal": self._current_car_key[0] if self._current_car_key else 0,
+                    "car_class": self._current_car_key[1] if self._current_car_key else 0,
+                    "pi": self._current_car_key[2] if self._current_car_key else 0,
+                    "using_cached_car": False,
                 }
+            td = snapshot_td
             optimal_shift = self._optimal_shift_snapshot(td)
             shift_guide = self._shift_guide_snapshot(td)
+            state = "STANDBY" if using_cached_car else self._tcu_state
+            sub_state = "last car cached" if using_cached_car else self._tcu_state_sub
             return {
                 "gear": td.gear,
                 "speed_kmh": td.speed_kmh,
@@ -377,8 +391,8 @@ class TCULogic:
                 "throttle": td.throttle,
                 "brake": td.brake,
                 "is_race_on": bool(td.is_race_on),
-                "tcu_state": self._tcu_state,
-                "tcu_state_sub": self._tcu_state_sub,
+                "tcu_state": state,
+                "tcu_state_sub": sub_state,
                 "power_kw": td.power_w / 1000.0,
                 "torque_nm": td.torque_nm,
                 "turbo_bar": self._turbo_bar,
@@ -412,6 +426,7 @@ class TCULogic:
                 "peak_torque_rpm_pct": self._power_curve.peak_torque_rpm(td.car_key),
                 **optimal_shift,
                 "shift_guide": shift_guide,
+                "using_cached_car": using_cached_car,
             }
 
     @staticmethod
@@ -579,6 +594,36 @@ class TCULogic:
         with self._data_lock:
             return self._graph_buffer.snapshot()
 
+    def clear_current_car_learning(self) -> dict:
+        with self._data_lock:
+            car_key = self._current_car_key
+            if car_key is None and self._last_valid_telemetry is not None:
+                car_key = self._last_valid_telemetry.car_key
+            if car_key is None or car_key[0] <= 0:
+                return {"ok": False, "error": "no_current_car"}
+
+            self._calibrator.reset_car(car_key)
+            self._power_curve.reset_car(car_key)
+            self._rev_limiter.reset_car(car_key)
+            self._shift_lag.reset_car(car_key)
+            profile_deleted = self._profiles.delete(car_key)
+
+            if self._current_car_key == car_key:
+                self._last_profile_signature = self._profile_signature(car_key)
+                self._last_saved_profile_at = time.time()
+
+            td = self._last_valid_telemetry or Telemetry(
+                car_ordinal=car_key[0],
+                car_class=car_key[1],
+                pi=car_key[2],
+            )
+            self._record_decision("clear_learning", td, profile_deleted=profile_deleted)
+            return {
+                "ok": True,
+                "car_key": list(car_key),
+                "profile_deleted": profile_deleted,
+            }
+
     def process(self, td: Telemetry, raw_packet: bytes | None = None):
         with self._data_lock:
             self._process_internal(td, raw_packet)
@@ -618,6 +663,8 @@ class TCULogic:
             self._tcu_state = "NO DATA"
             self._tcu_state_sub = "waiting telemetry"
             return
+
+        self._last_valid_telemetry = td
 
         if td.is_shifting:
             self._tcu_state = "SHIFTING"
@@ -699,12 +746,10 @@ class TCULogic:
             self._last_profile_signature = None
             # Reset per-tune learning data so stale ratios / curves from a
             # different build don't poison shift decisions.
-            self._calibrator._ratios.pop(ck, None)
-            self._calibrator._counts.pop(ck, None)
-            self._calibrator._wheel_radius.pop(ck, None)
-            self._calibrator._wheel_radius_counts.pop(ck, None)
-            self._power_curve._fits.pop(ck, None)
+            self._calibrator.reset_car(ck)
+            self._power_curve.reset_car(ck)
             self._rev_limiter.reset_car(ck)
+            self._shift_lag.reset_car(ck)
             # Restore previously-saved learning data for this car+tune.
             self._load_profiles(ck)
             self._last_profile_signature = self._profile_signature(ck)

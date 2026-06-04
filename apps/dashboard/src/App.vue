@@ -17,6 +17,8 @@
     logStatus,
     shiftHistory,
     sessionStats,
+    learningClearStatus,
+    clearCurrentCarLearning,
   } = useTcuViewStore()
 </script>
 
@@ -24,7 +26,7 @@
   <TcuConfigProvider dark>
     <AppHeader :mode="mode" :connected="connected" :live="live" />
     <main
-      class="bg-tcu-border grid min-h-0 grid-cols-[260px_1fr_300px] gap-px max-[1100px]:grid-cols-1"
+      class="bg-tcu-border grid min-h-0 grid-cols-[220px_minmax(0,1fr)_300px] gap-px max-[1100px]:grid-cols-1"
     >
       <ModeSidebar
         :mode="mode"
@@ -34,7 +36,12 @@
         :log-status="logStatus"
         :interactive="false"
       />
-      <DashboardPanel :live="live" :telemetry="telemetry" />
+      <DashboardPanel
+        :live="live"
+        :telemetry="telemetry"
+        :clear-status="learningClearStatus"
+        @clear-learning="clearCurrentCarLearning"
+      />
       <StatsHistoryPanel
         :telemetry="telemetry"
         :session-stats="sessionStats"

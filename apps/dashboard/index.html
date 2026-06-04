@@ -78,7 +78,7 @@
 
       main {
         display: grid;
-        grid-template-columns: 280px minmax(0, 1fr) 320px;
+        grid-template-columns: minmax(0, 1fr) 320px;
         gap: 1px;
         flex: 1;
         background: var(--border);
@@ -133,92 +133,47 @@
         background: #102016;
       }
 
-      .rpm-leds {
-        display: grid;
-        grid-template-columns: repeat(20, minmax(0, 1fr));
-        gap: 4px;
-        height: 28px;
-      }
-
-      .led {
-        border: 1px solid #000;
-        border-radius: 3px;
-        background: var(--panel-2);
-      }
-
-      .led.on.green {
-        background: var(--green);
-        box-shadow: 0 0 8px var(--green);
-      }
-
-      .led.on.yellow {
-        background: var(--yellow);
-        box-shadow: 0 0 8px var(--yellow);
-      }
-
-      .led.on.red {
-        background: var(--red);
-        box-shadow: 0 0 8px var(--red);
-      }
-
-      .led.on.blue {
-        background: var(--blue);
-        box-shadow: 0 0 8px var(--blue);
-      }
-
-      .hero {
-        display: grid;
-        grid-template-columns: 220px minmax(0, 1fr) 170px;
-        gap: 12px;
-      }
-
-      .gear {
-        display: grid;
-        place-items: center;
-        min-height: 250px;
-        font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-        font-size: 128px;
-        font-weight: 900;
-        line-height: 1;
-      }
-
-      .big-num {
-        font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-        font-size: 56px;
-        font-weight: 800;
-        line-height: 1;
-      }
-
-      .rpm {
-        font-size: 72px;
-      }
-
-      .metrics {
+      .summary-grid {
         display: grid;
         grid-template-columns: repeat(3, minmax(0, 1fr));
-        gap: 12px;
-      }
-
-      .bar-row {
-        display: grid;
-        grid-template-columns: 52px 1fr 48px;
-        align-items: center;
         gap: 10px;
-        margin: 12px 0;
       }
 
-      .bar {
-        height: 12px;
-        overflow: hidden;
+      .summary-tile {
+        min-width: 0;
         border: 1px solid var(--border);
-        border-radius: 999px;
+        border-radius: 6px;
         background: var(--panel-2);
+        padding: 10px;
       }
 
-      .bar > div {
-        height: 100%;
-        width: 0%;
-        background: var(--green);
+      .summary-tile strong {
+        display: block;
+        margin-top: 4px;
+        overflow: hidden;
+        color: var(--text);
+        font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+        font-size: 20px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .action-button {
+        width: 100%;
+        border: 1px solid #7f1d1d;
+        border-radius: 6px;
+        padding: 10px 12px;
+        color: #fecaca;
+        background: #2b0b0b;
+        font-weight: 900;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        cursor: pointer;
+      }
+
+      .action-button:disabled {
+        cursor: not-allowed;
+        opacity: 0.45;
       }
 
       .kv {
@@ -301,23 +256,6 @@
         background: #2b1d05;
       }
 
-      .sport-track {
-        position: relative;
-        height: 8px;
-        overflow: hidden;
-        border-radius: 999px;
-        background: linear-gradient(90deg, var(--blue), #a855f7, var(--green));
-      }
-
-      .sport-mask {
-        position: absolute;
-        top: 0;
-        right: 0;
-        bottom: 0;
-        width: 100%;
-        background: rgba(0, 0, 0, 0.72);
-      }
-
       .lower-grid {
         display: grid;
         grid-template-columns: minmax(0, 1fr);
@@ -326,7 +264,7 @@
 
       .guide {
         display: flex;
-        min-height: 520px;
+        min-height: 640px;
         flex-direction: column;
         gap: 12px;
       }
@@ -364,7 +302,7 @@
       #powerCurveCanvas {
         display: block;
         width: 100%;
-        height: 330px;
+        height: 470px;
         border: 1px solid var(--border);
         border-radius: 6px;
         background: #070a0f;
@@ -480,14 +418,8 @@
 
       @media (max-width: 1100px) {
         main,
-        .hero,
         .lower-grid {
           grid-template-columns: 1fr;
-        }
-
-        .gear {
-          min-height: 180px;
-          font-size: 96px;
         }
       }
 
@@ -502,16 +434,12 @@
           padding: 12px;
         }
 
-        .metrics {
+        .summary-grid {
           grid-template-columns: 1fr;
         }
 
         .guide-summary {
           grid-template-columns: repeat(2, minmax(0, 1fr));
-        }
-
-        .rpm {
-          font-size: 48px;
         }
       }
     </style>
@@ -524,76 +452,12 @@
 
     <main>
       <section class="stack">
-        <div class="card stack">
-          <div class="label">车辆学习</div>
-          <div><span id="calibrationPill" class="pill yellow">学习中</span></div>
-          <div class="kv"><span>齿比</span><strong id="gearLearning">学习中</strong></div>
-          <div class="kv"><span>动力曲线</span><strong id="powerLearning">学习中</strong></div>
-        </div>
-
-        <div class="card stack">
-          <div class="label">驾驶风格</div>
-          <div class="kv"><span>运动指数</span><strong id="sportIndex">0.00</strong></div>
-          <div class="sport-track"><div id="sportMask" class="sport-mask"></div></div>
-          <div class="kv"><span>状态</span><strong id="sportRegime">巡航</strong></div>
-        </div>
-
-        <div class="card stack">
-          <div class="label">动力区间</div>
-          <div class="kv"><span>峰值扭矩</span><strong id="peakTorque">学习中</strong></div>
-          <div class="kv"><span>峰值功率</span><strong id="peakPowerBand">学习中</strong></div>
-          <div class="kv"><span>最高转速</span><strong id="peakRpmSmall">0</strong></div>
-        </div>
-      </section>
-
-      <section class="stack">
-        <div class="rpm-leds" id="leds"></div>
-        <div class="hero">
-          <div class="card">
-            <div class="label">挡位</div>
-            <div id="gear" class="gear">-</div>
-            <div class="label" id="drivetrainLabel">驱动形式</div>
-          </div>
-
-          <div class="card stack">
-            <div class="label">转速</div>
-            <div><span id="rpm" class="big-num rpm">0</span> <span class="label">RPM</span></div>
-            <div class="kv"><span>最大转速</span><strong id="rpmMax">8000</strong></div>
-            <div class="bar"><div id="rpmBar"></div></div>
-            <div class="metrics">
-              <div>
-                <div class="label">速度</div>
-                <div><span id="speed" class="big-num">0</span> <span class="label">KM/H</span></div>
-              </div>
-              <div>
-                <div class="label">功率</div>
-                <div><span id="power" class="big-num">0</span> <span class="label">KW</span></div>
-              </div>
-              <div>
-                <div class="label">扭矩</div>
-                <div><span id="torque" class="big-num">0</span> <span class="label">NM</span></div>
-              </div>
-            </div>
-          </div>
-
-          <div class="card">
-            <div class="label">踏板输入</div>
-            <div class="bar-row"><span>油门</span><div class="bar"><div id="throttleBar"></div></div><strong id="throttle">0</strong></div>
-            <div class="bar-row"><span>刹车</span><div class="bar"><div id="brakeBar"></div></div><strong id="brake">0</strong></div>
-            <div class="bar-row"><span>离合</span><div class="bar"><div id="clutchBar"></div></div><strong id="clutch">0</strong></div>
-          </div>
-        </div>
-
         <div class="lower-grid">
           <div class="card guide">
             <div class="guide-head">
               <div>
-                <div id="guideTitle" class="label">学习功率曲线</div>
+                <div id="guideTitle" class="label">功率曲线</div>
                 <div id="guideCurrent" class="guide-sub">G- 0 RPM -- HP</div>
-              </div>
-              <div class="guide-status-row">
-                <span id="guideStatus" class="pill yellow">学习中</span>
-                <span id="guideConfidence" class="guide-confidence">0%</span>
               </div>
             </div>
             <canvas id="powerCurveCanvas" width="1100" height="330"></canvas>
@@ -636,7 +500,7 @@
               </table>
             </div>
             <div id="guideNote" class="guide-note">
-              每辆车或调校的齿比和动力曲线会单独保存，当前转速点会随实时 RPM 在曲线上移动。
+              每辆车或调校的齿比和动力曲线会单独保存，曲线中的竖线表示各挡升挡目标。
             </div>
           </div>
         </div>
@@ -644,11 +508,26 @@
 
       <section class="stack">
         <div class="card stack">
-          <div class="label">遥测数据</div>
+          <div class="label">当前车辆</div>
+          <div><span id="carCachePill" class="pill yellow">等待车辆</span></div>
+          <div class="kv"><span>车辆</span><strong id="carKey">--</strong></div>
+          <button id="clearLearningButton" class="action-button" type="button" disabled>清理这辆车学习</button>
+          <div id="clearLearningStatus" class="guide-note">切出游戏后会保留上一辆有效车辆。</div>
+        </div>
+
+        <div class="card stack">
+          <div class="label">TCU 状态</div>
+          <div class="kv"><span>状态</span><strong id="tcuState">--</strong></div>
+          <div class="kv"><span>原因</span><strong id="tcuSubState">--</strong></div>
           <div class="kv"><span>涡轮</span><strong id="turbo">0.00 bar</strong></div>
-          <div class="kv"><span>当前转速</span><strong id="telemetryRpm">0 rpm</strong></div>
-          <div class="kv"><span>当前挡位</span><strong id="telemetryGear">-</strong></div>
           <div class="kv"><span>推荐升挡</span><strong id="telemetryShift">--</strong></div>
+        </div>
+
+        <div class="card stack">
+          <div class="label">动力区间</div>
+          <div class="kv"><span>峰值扭矩</span><strong id="peakTorque">学习中</strong></div>
+          <div class="kv"><span>峰值功率</span><strong id="peakPowerBand">学习中</strong></div>
+          <div class="kv"><span>最高转速</span><strong id="peakRpmSmall">0</strong></div>
         </div>
 
         <div class="card stack">
@@ -695,6 +574,8 @@
           effectiveOutputMode: "-",
           telemetry: null,
           history: [],
+          clearConfirmUntil: 0,
+          learningClearStatus: "",
           reconnectTimer: null,
           ws: null,
         };
@@ -741,18 +622,6 @@
           return mins + "分 " + secs + "秒";
         }
 
-        function zhRegime(value) {
-          var map = {
-            CRUISE: "巡航",
-            SPORT: "运动",
-            ATTACK: "激进",
-            CALM: "平稳",
-            AGGRESSIVE: "激进",
-          };
-          var key = String(value || "CRUISE").toUpperCase();
-          return map[key] || key;
-        }
-
         function zhAttitude(value) {
           var map = {
             NEUTRAL: "中性",
@@ -772,6 +641,16 @@
         function wsUrl() {
           var proto = window.location.protocol === "https:" ? "wss:" : "ws:";
           return proto + "//" + window.location.host + "/ws";
+        }
+
+        function canSend() {
+          return state.ws && state.ws.readyState === WebSocket.OPEN;
+        }
+
+        function sendMessage(payload) {
+          if (!canSend()) return false;
+          state.ws.send(JSON.stringify(payload));
+          return true;
         }
 
         function log(line) {
@@ -797,6 +676,52 @@
               return null;
             }
           }
+        }
+
+        function hasCarInfo(t) {
+          return t && Number(t.car_ordinal || 0) > 0;
+        }
+
+        function carKeyText(t) {
+          if (!hasCarInfo(t)) return "--";
+          var parts = ["#" + t.car_ordinal];
+          if (t.car_class !== null && t.car_class !== undefined && t.car_class !== "") parts.push(String(t.car_class));
+          if (t.pi !== null && t.pi !== undefined) parts.push("PI " + t.pi);
+          return parts.join(" / ");
+        }
+
+        function requestClearLearning() {
+          var t = state.telemetry || {};
+          if (!hasCarInfo(t)) {
+            state.learningClearStatus = "还没有可清理的车辆。";
+            render();
+            return;
+          }
+          if (!canSend()) {
+            state.learningClearStatus = "后端未连接，暂时不能清理。";
+            render();
+            return;
+          }
+
+          var now = Date.now();
+          if (state.clearConfirmUntil <= now) {
+            state.clearConfirmUntil = now + 2500;
+            state.learningClearStatus = "再次点击确认清理这辆车的学习。";
+            window.setTimeout(function () {
+              if (state.clearConfirmUntil && state.clearConfirmUntil <= Date.now()) {
+                state.clearConfirmUntil = 0;
+                state.learningClearStatus = "";
+                render();
+              }
+            }, 2600);
+            render();
+            return;
+          }
+
+          state.clearConfirmUntil = 0;
+          state.learningClearStatus = "正在清理...";
+          sendMessage({ type: "clear_current_car_learning" });
+          render();
         }
 
         function renderModes() {
@@ -1186,13 +1111,6 @@
         function renderShiftGuide(t) {
           var guide = t.shift_guide || {};
           var rows = sortedGuideRows(guide);
-          var confidence = Math.round(clamp(guide.confidence || 0, 0, 1) * 100);
-          var status = byId("guideStatus");
-          if (status) {
-            status.className = "pill " + (guide.learned ? "green" : "yellow");
-            status.textContent = guide.learned ? "已学习" : guide.available ? "学习中" : "等待数据";
-          }
-
           text(
             "guidePeakHp",
             guide.peak_hp && guide.peak_hp_rpm
@@ -1222,7 +1140,6 @@
           text("guideGearDetail", current ? "G" + current.gear + " / " + Number(current.ratio || 0).toFixed(4) : "--");
           text("guideCurrentShift", shiftText);
           text("guideSamples", round(guide.sample_count) + " / " + round(guide.bin_count) + " bins");
-          text("guideConfidence", confidence + "%");
           drawPowerCurve(t, guide, rows);
 
           var body = byId("guideRows");
@@ -1267,40 +1184,41 @@
           var note = byId("guideNote");
           if (note) {
             if (!guide.available) {
-              note.textContent = "首次使用当前车辆/调校时，先直线平稳行驶学习齿比，再做 2/3 挡全油门拉转。";
+              note.textContent = "等待齿比和动力曲线数据，暂时使用保守换挡目标。";
             } else if (!guide.learned) {
               note.textContent =
-                "可以继续用赛道模式行驶；想让推荐转速更准，找干净路面做一次全油门拉转。";
+                "数据还不完整时会使用保守目标；样本增加后曲线和升挡目标会自动更新。";
             } else {
               note.textContent =
-                "推荐升挡点来自当前车辆/调校的动力曲线和齿比；换车或改调校后会重新学习。";
+                "推荐升挡点来自当前车辆/调校的动力曲线和齿比；换车或改调校后会自动使用对应数据。";
             }
           }
         }
 
         function renderLearning(t) {
-          var calibrated = !!t.calibrated;
-          var pill = byId("calibrationPill");
+          var hasCar = hasCarInfo(t);
+          var pill = byId("carCachePill");
           if (pill) {
-            pill.className = "pill " + (calibrated ? "green" : "yellow");
-            pill.textContent = calibrated ? "已校准" : "学习中";
+            pill.className = "pill " + (hasCar && !t.using_cached_car ? "green" : "yellow");
+            pill.textContent = hasCar ? (t.using_cached_car ? "缓存车辆" : "当前车辆") : "等待车辆";
           }
-          text("gearLearning", calibrated ? "已学习" : "学习中");
-          var powerConfidence = Math.round(clamp(t.power_curve_confidence || 0, 0, 1) * 100);
-          text(
-            "powerLearning",
-            t.power_curve_learned
-              ? "已成熟"
-              : t.power_curve_available
-                ? "学习中 " + powerConfidence + "%"
-                : "学习中"
-          );
+          text("carKey", carKeyText(t));
 
-          var sport = clamp(t.drive_style_index, 0, 1);
-          text("sportIndex", fixed(sport, 2));
-          var sportMask = byId("sportMask");
-          if (sportMask) sportMask.style.width = (100 - sport * 100) + "%";
-          text("sportRegime", zhRegime(t.drive_style_regime));
+          var clearButton = byId("clearLearningButton");
+          if (clearButton) {
+            var confirming = state.clearConfirmUntil > Date.now();
+            clearButton.disabled = !hasCar || !canSend();
+            clearButton.textContent = confirming ? "确认清理学习" : "清理这辆车学习";
+          }
+          text(
+            "clearLearningStatus",
+            state.learningClearStatus ||
+              (hasCar
+                ? t.using_cached_car
+                  ? "显示的是切出游戏前最后一辆车。"
+                  : "将清理当前车辆/调校的齿比、功率曲线、限转和换挡响应。"
+                : "等待车辆遥测。")
+          );
 
           var tq = t.peak_torque_rpm_pct;
           var hp = t.peak_power_rpm_pct;
@@ -1338,26 +1256,8 @@
           renderModes();
 
           var t = state.telemetry || {};
-          text("gear", gearLabel(t.gear));
-          text("speed", round(t.speed_kmh));
-          text("rpm", round(t.rpm));
-          text("rpmMax", round(t.rpm_max || 8000));
-          text("drivetrainLabel", t.drivetrain || "驱动形式");
-          text("power", round(t.power_kw));
-          text("torque", round(t.torque_nm));
-          setBar("rpmBar", (Number(t.rpm_pct) || 0) * 100, (Number(t.rpm_pct) || 0) > 0.9 ? "var(--red)" : "var(--green)");
-          renderLeds(Number(t.rpm_pct) || 0);
-
-          var throttle = (Number(t.throttle) || 0) * 100;
-          var brake = (Number(t.brake) || 0) * 100;
-          var clutch = t.clutch_raw ? (Number(t.clutch_raw) / 255) * 100 : 0;
-          text("throttle", round(throttle));
-          text("brake", round(brake));
-          text("clutch", round(clutch));
-          setBar("throttleBar", throttle, "var(--green)");
-          setBar("brakeBar", brake, "var(--red)");
-          setBar("clutchBar", clutch, "var(--blue)");
-
+          text("tcuState", t.tcu_state || "--");
+          text("tcuSubState", t.tcu_state_sub || "--");
           text("turbo", fixed(t.turbo_bar, 2) + " bar");
           renderLearning(t);
           renderStats(t);
@@ -1387,6 +1287,14 @@
             if (msg.data.packets_total !== undefined) state.packetsTotal = msg.data.packets_total;
           } else if (msg.type === "log_status") {
             state.logStatus = msg.data;
+          } else if (msg.type === "learning_cleared") {
+            state.clearConfirmUntil = 0;
+            if (msg.ok) {
+              state.learningClearStatus = "已清理这辆车的学习。";
+            } else {
+              state.learningClearStatus = msg.error === "no_current_car" ? "还没有缓存车辆。" : "清理失败。";
+            }
+            log(state.learningClearStatus);
           }
           render();
         }
@@ -1432,6 +1340,9 @@
         window.addEventListener("error", function (event) {
           log("Page error: " + event.message);
         });
+
+        var clearButton = byId("clearLearningButton");
+        if (clearButton) clearButton.addEventListener("click", requestClearLearning);
 
         render();
         connect();

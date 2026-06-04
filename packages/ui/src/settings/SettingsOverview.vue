@@ -1,7 +1,7 @@
 <script setup lang="ts">
   import { EyeOutline, OpenOutline } from '@vicons/ionicons5'
   import { NButton, NCard, NDivider, NFlex, NGrid, NGridItem, NIcon, NTag, NText } from 'naive-ui'
-  import { inject } from 'vue'
+  import { computed, inject, ref, watch } from 'vue'
   import { settingsContextKey } from './context'
 
   const ctx = inject(settingsContextKey)!
@@ -35,6 +35,38 @@
   function modeTagText(id: string, i18nKey: string) {
     return `${t(`modes.${i18nKey}.name`)} · ${t(`modes.${i18nKey}.tag`).toUpperCase()}`
   }
+
+  const clearConfirming = ref(false)
+  const hasCar = computed(() => Number(store.telemetry.value?.car_ordinal ?? 0) > 0)
+  const carLabel = computed(() => {
+    const telemetry = store.telemetry.value
+    if (!telemetry || !hasCar.value) return t('calibration.noCar')
+    return `#${telemetry.car_ordinal} / ${telemetry.car_class ?? '-'} / PI ${telemetry.pi ?? '-'}`
+  })
+  const clearLearningStatus = computed(() => {
+    const status = store.learningClearStatus.value
+    if (status?.ok) return t('calibration.clearDone')
+    if (status?.error) return t('calibration.clearFailed')
+    if (store.telemetry.value?.using_cached_car) return t('calibration.cachedHint')
+    return t('calibration.clearHint')
+  })
+
+  function onClearLearning() {
+    if (!hasCar.value) return
+    if (!clearConfirming.value) {
+      clearConfirming.value = true
+      window.setTimeout(() => {
+        clearConfirming.value = false
+      }, 2500)
+      return
+    }
+    clearConfirming.value = false
+    store.clearCurrentCarLearning()
+  }
+
+  watch(() => store.learningClearStatus.value?.at, () => {
+    clearConfirming.value = false
+  })
 </script>
 
 <template>
@@ -142,20 +174,76 @@
 
     <NGridItem :span="6">
       <NCard :title="t('calibration.title')" size="small" :bordered="false">
+        <NFlex vertical :size="10">
+          <NFlex align="center" :size="12">
+            <NTag
+              :type="store.telemetry.value?.calibrated ? 'success' : 'warning'"
+              :bordered="false"
+              round
+            >
+              {{
+                store.telemetry.value?.calibrated
+                  ? t('calibration.calibrated')
+                  : t('calibration.learning')
+              }}
+            </NTag>
+            <NTag
+              :type="store.telemetry.value?.using_cached_car ? 'warning' : 'info'"
+              :bordered="false"
+              round
+            >
+              {{
+                store.telemetry.value?.using_cached_car
+                  ? t('calibration.cachedCar')
+                  : t('calibration.currentCar')
+              }}
+            </NTag>
+          </NFlex>
+          <NText code style="font-family: ui-monospace, monospace; font-size: 12px">
+            {{ carLabel }}
+          </NText>
+          <NText depth="3" style="font-size: 12px">
+            {{ clearLearningStatus }}
+          </NText>
+          <NButton
+            type="error"
+            ghost
+            size="small"
+            :disabled="!hasCar"
+            @click="onClearLearning"
+          >
+            {{
+              clearConfirming
+                ? t('calibration.clearConfirm')
+                : t('calibration.clearCurrentCar')
+            }}
+          </NButton>
+        </NFlex>
+      </NCard>
+    </NGridItem>
+
+    <NGridItem :span="6">
+      <NCard :title="t('powerBand.title')" size="small" :bordered="false">
         <NFlex align="center" :size="12">
           <NTag
-            :type="store.telemetry.value?.calibrated ? 'success' : 'warning'"
+            :type="
+              store.telemetry.value?.power_curve_learned
+                ? 'success'
+                : store.telemetry.value?.power_curve_available
+                  ? 'info'
+                  : 'warning'
+            "
             :bordered="false"
             round
           >
             {{
-              store.telemetry.value?.calibrated
-                ? t('calibration.calibrated')
-                : t('calibration.learning')
+              store.telemetry.value?.power_curve_learned
+                ? t('stats.learned')
+                : t('stats.learningStatus')
             }}
           </NTag>
           <NText depth="3" style="font-size: 12px">
-            {{ t('calibration.hint') }}
+            {{ t('powerBand.hint') }}
           </NText>
         </NFlex>
       </NCard>

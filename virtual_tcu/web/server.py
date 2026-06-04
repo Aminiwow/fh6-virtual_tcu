@@ -159,6 +159,10 @@ class WebServer:
             )
         elif t == "request_graph":
             await ws.send_json({"type": "graph_data", "data": self._tcu.snapshot_graph()})
+        elif t == "clear_current_car_learning":
+            result = self._tcu.clear_current_car_learning()
+            await ws.send_json({"type": "learning_cleared", **result})
+            await ws.send_json({"type": "telemetry", "data": self._tcu.snapshot(self._recv.latest())})
         elif t == "export_profile":
             export = {
                 "version": "v12",

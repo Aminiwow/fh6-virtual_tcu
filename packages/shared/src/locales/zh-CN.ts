@@ -71,9 +71,17 @@ export default {
   calibration: {
     title: '齿比标定',
     currentCar: '当前车辆',
+    cachedCar: '缓存车辆',
+    noCar: '暂无车辆',
     calibrated: '已标定',
     learning: '学习中…',
     hint: '根据遥测自动学习各档齿比，提升换挡精度。',
+    cachedHint: '当前显示的是切出游戏前最后识别到的车辆。',
+    clearHint: '清理当前车辆/调校的齿比、功率曲线、限转和换挡响应学习。',
+    clearCurrentCar: '清理这辆车学习',
+    clearConfirm: '确认清理学习',
+    clearDone: '已清理这辆车的学习。',
+    clearFailed: '清理失败，请确认后端已连接并已识别车辆。',
   },
   driveStyle: {
     title: '驾驶风格',

@@ -40,6 +40,7 @@ export type WsOutbound =
   | { type: 'log_start'; mode: string }
   | { type: 'log_stop' }
   | { type: 'request_graph' }
+  | { type: 'clear_current_car_learning' }
   | { type: 'export_profile' }
   | { type: 'import_profile'; data: unknown }
 
@@ -52,6 +53,13 @@ export type WsInbound =
   | { type: 'log_status'; data: LogStatus; last_file?: string }
   | { type: 'profile_export'; data: unknown }
   | { type: 'profile_imported'; ok: boolean; data?: ConfigMap; error?: string }
+  | {
+      type: 'learning_cleared'
+      ok: boolean
+      car_key?: number[]
+      profile_deleted?: boolean
+      error?: string
+    }
   | { type: 'graph_data'; data: unknown }
   | { type: 'network_changed'; ok?: boolean; error?: string; data: WebUrls }
   | { type: 'web_bind_changed'; ok?: boolean; error?: string; data: WebUrls }

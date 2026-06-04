@@ -42,6 +42,7 @@ export function useTcuStore() {
   const webUrls = ref<WebUrls | null>(null)
   const webBindStatus = ref<{ ok: boolean; error?: string } | null>(null)
   const effectiveOutputMode = ref<'keyboard' | null>(null)
+  const learningClearStatus = ref<{ ok: boolean; error?: string; at: number } | null>(null)
 
   const modal = reactive({
     open: false,
@@ -95,6 +96,13 @@ export function useTcuStore() {
           Object.assign(config, msg.data)
         }
         break
+      case 'learning_cleared':
+        learningClearStatus.value = {
+          ok: msg.ok,
+          error: msg.error,
+          at: Date.now(),
+        }
+        break
       case 'web_bind_changed':
       case 'network_changed':
         webBindStatus.value = { ok: msg.ok !== false, error: msg.error }
@@ -133,6 +141,10 @@ export function useTcuStore() {
 
   function resetConfig() {
     send({ type: 'reset_config' })
+  }
+
+  function clearCurrentCarLearning() {
+    send({ type: 'clear_current_car_learning' })
   }
 
   function openModal(m: 'export' | 'import', title: string, content: string) {
@@ -235,6 +247,7 @@ export function useTcuStore() {
     webUrls,
     webBindStatus,
     effectiveOutputMode,
+    learningClearStatus,
     sessionStats,
     connectionLabel,
     modal,
@@ -244,6 +257,7 @@ export function useTcuStore() {
     applyWebBind,
     applyNetwork,
     resetConfig,
+    clearCurrentCarLearning,
     openModal,
     closeModal,
     confirmModal,

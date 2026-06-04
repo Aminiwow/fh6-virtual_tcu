@@ -16,6 +16,7 @@ export function useTcuViewStore() {
   const logStatus = ref<LogStatus | null>(null)
   const shiftHistory = ref<ShiftHistoryItem[]>([])
   const watchdogStuck = ref(false)
+  const learningClearStatus = ref<{ ok: boolean; error?: string; at: number } | null>(null)
 
   function handle(msg: WsInbound) {
     switch (msg.type) {
@@ -42,7 +43,18 @@ export function useTcuViewStore() {
       case 'log_status':
         logStatus.value = msg.data
         break
+      case 'learning_cleared':
+        learningClearStatus.value = {
+          ok: msg.ok,
+          error: msg.error,
+          at: Date.now(),
+        }
+        break
     }
+  }
+
+  function clearCurrentCarLearning() {
+    client.send({ type: 'clear_current_car_learning' })
   }
 
   const sessionStats = computed(() => telemetry.value?.session_stats ?? null)
@@ -77,7 +89,9 @@ export function useTcuViewStore() {
     logStatus,
     shiftHistory,
     watchdogStuck,
+    learningClearStatus,
     sessionStats,
     connectionLabel,
+    clearCurrentCarLearning,
   }
 }

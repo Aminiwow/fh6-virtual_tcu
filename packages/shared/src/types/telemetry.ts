@@ -119,4 +119,8 @@ export interface TelemetrySnapshot {
   optimal_shift_to_gear?: number | null
   optimal_shift_source?: string
   shift_guide?: ShiftGuide
+  car_ordinal?: number
+  car_class?: number
+  pi?: number
+  using_cached_car?: boolean
 }

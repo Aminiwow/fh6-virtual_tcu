@@ -6,14 +6,6 @@ export function useModeSidebar(
   telemetry: Ref<TelemetrySnapshot | null>,
   logStatus: Ref<LogStatus | null>,
 ) {
-  const calibClass = computed(() => (telemetry.value?.calibrated ? 'calibrated' : 'learning'))
-
-  const sportIndex = computed(() => (telemetry.value?.drive_style_index ?? 0).toFixed(2))
-  const sportBarWidth = computed(
-    () => `${((telemetry.value?.drive_style_index ?? 0) * 100).toFixed(0)}%`,
-  )
-  const sportRegime = computed(() => telemetry.value?.drive_style_regime || 'CRUISE')
-
   const hasTorque = computed(() => telemetry.value?.peak_torque_rpm_pct != null)
   const hasPower = computed(() => telemetry.value?.peak_power_rpm_pct != null)
 
@@ -36,10 +28,6 @@ export function useModeSidebar(
   const logSize = computed(() => `${logStatus.value?.size_kb ?? 0} KB`)
 
   return {
-    calibClass,
-    sportIndex,
-    sportBarWidth,
-    sportRegime,
     hasTorque,
     hasPower,
     peakTorqueText,

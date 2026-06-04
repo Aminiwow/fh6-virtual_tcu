@@ -156,6 +156,14 @@ class ShiftLagLearner:
         idx = min(len(sorted_samples) - 1, round((len(sorted_samples) - 1) * 0.70))
         return sorted_samples[idx]
 
+    def reset_car(self, car_key: tuple):
+        self._upshift_lags.pop(car_key, None)
+        self._downshift_lags.pop(car_key, None)
+        for key in [key for key in self._upshift_rpm_gains if key[0] == car_key]:
+            self._upshift_rpm_gains.pop(key, None)
+        if self._last_shift_command_car_key == car_key:
+            self._clear_last_shift_command()
+
     def dump(self, car_key: tuple) -> dict | None:
         """Export persisted learning data."""
         up_samples = self._upshift_lags.get(car_key)

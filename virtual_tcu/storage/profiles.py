@@ -41,3 +41,11 @@ class ProfileStore:
     def set(self, car_key: tuple[int, int, int], profile: dict):
         self.data[_key(car_key)] = profile
         self.save()
+
+    def delete(self, car_key: tuple[int, int, int]) -> bool:
+        key = _key(car_key)
+        if key not in self.data:
+            return False
+        del self.data[key]
+        self.save()
+        return True

@@ -49,10 +49,12 @@ export interface SettingsContext {
     packetsTotal: Ref<number>
     webUrls: Ref<{ local?: string; lan?: string; udp_port?: number } | null>
     effectiveOutputMode: Ref<'keyboard' | null>
+    learningClearStatus: Ref<{ ok: boolean; error?: string; at: number } | null>
     modal: { open: boolean; title: string; text: string; readOnly: boolean; mode: string }
     setMode: (id: string) => void
     setConfig: (key: string, value: unknown) => void
     resetConfig: () => void
+    clearCurrentCarLearning: () => void
     send: (msg: Record<string, unknown>) => void
     closeModal: () => void
     confirmModal: () => void

@@ -111,6 +111,56 @@ def test_profile_signature_tracks_new_learned_ratios(tmp_path):
     assert tcu._profile_signature(car_key) != before
 
 
+def test_snapshot_uses_last_valid_car_when_telemetry_is_missing(tmp_path):
+    tcu, _output = make_tcu(tmp_path, "RACE")
+    car_key = (1, 5, 900)
+    tcu._current_car_key = car_key
+    tcu._last_valid_telemetry = telemetry(
+        car_ordinal=car_key[0],
+        car_class=car_key[1],
+        pi=car_key[2],
+        gear=3,
+        current_rpm=5200.0,
+    )
+    seed_ratios(tcu, car_key)
+
+    snapshot = tcu.snapshot(None)
+
+    assert snapshot["using_cached_car"] is True
+    assert snapshot["car_ordinal"] == car_key[0]
+    assert snapshot["gear"] == 3
+    assert snapshot["shift_guide"]["available"] is True
+
+
+def test_clear_current_car_learning_resets_profile_and_memory(tmp_path):
+    profiles = ProfileStore(tmp_path / "profiles.json")
+    tcu, _output = make_tcu(tmp_path, "RACE")
+    tcu._profiles = profiles
+    car_key = (1, 5, 900)
+    tcu._current_car_key = car_key
+    tcu._last_valid_telemetry = telemetry(
+        car_ordinal=car_key[0],
+        car_class=car_key[1],
+        pi=car_key[2],
+    )
+    seed_ratios(tcu, car_key)
+    tcu._power_curve._fits[car_key] = object()
+    tcu._rev_limiter.load(car_key, 7400.0)
+    tcu._shift_lag.record_shift_command(car_key, "UP", 1, 1.0, command_rpm=7000.0)
+    tcu._shift_lag.observe_command_frame(car_key, 1, 7120.0)
+    tcu._shift_lag.observe_gear_change(car_key, 2, 1.04)
+    profiles.set(car_key, {"telemetry_schema": tcu.PROFILE_SCHEMA, "rev_limiter": 7400.0})
+
+    result = tcu.clear_current_car_learning()
+
+    assert result["ok"] is True
+    assert profiles.get(car_key) is None
+    assert tcu._calibrator.dump(car_key) is None
+    assert tcu._power_curve.dump(car_key) is None
+    assert tcu._rev_limiter.dump(car_key) is None
+    assert tcu._shift_lag.dump(car_key) is None
+
+
 def test_upshift_decision_logs_target_context(tmp_path):
     tcu, output = make_tcu(tmp_path, "RACE")
     seed_ratios(tcu)

@@ -1,14 +1,12 @@
 <script setup lang="ts">
   import type { LogStatus, TelemetrySnapshot } from '@virtual-tcu/shared/types/telemetry'
   import { DRIVE_MODES } from '@virtual-tcu/shared/config/modes'
-  import { modeBtnClass, REGIME_PILL } from '@virtual-tcu/shared/utils/mode-colors'
+  import { modeBtnClass } from '@virtual-tcu/shared/utils/mode-colors'
   import { toRefs } from 'vue'
   import {
     actionBtn,
     actionBtnDanger,
     actionBtnPrimary,
-    badgeCalibrated,
-    badgeLearning,
     cardSm,
     col,
     sectionTitle,
@@ -38,9 +36,6 @@
 
   const { telemetry, logStatus, interactive } = toRefs(props)
   const {
-    sportIndex,
-    sportBarWidth,
-    sportRegime,
     hasTorque,
     hasPower,
     peakTorqueText,
@@ -51,7 +46,6 @@
     logSize,
   } = useModeSidebar(telemetry, logStatus)
 
-  const isCalibrated = () => !!telemetry.value?.calibrated
   const isRecording = () => !!logStatus.value?.recording
 </script>
 
@@ -94,55 +88,6 @@
     </template>
     <div class="bg-tcu-bg-1 text-tcu-txt-dim mt-3 rounded-md p-2.5 text-center text-xs">
       {{ $t('modes.hotkeyHintBefore') }}<kbd>F9</kbd><br />{{ $t('modes.hotkeyHintAfter') }}
-    </div>
-
-    <h3 class="mt-6" :class="[sectionTitle]">
-      {{ $t('calibration.title') }}
-    </h3>
-    <div :class="cardSm">
-      <div class="text-tcu-txt-dim mb-1.5 text-[11px]">
-        {{ $t('calibration.currentCar') }}
-      </div>
-      <span :class="isCalibrated() ? badgeCalibrated : badgeLearning">
-        {{ isCalibrated() ? $t('calibration.calibrated') : $t('calibration.learning') }}
-      </span>
-      <div class="text-tcu-txt-dim mt-2 text-[11px] leading-snug">
-        {{ $t('calibration.hint') }}
-      </div>
-    </div>
-
-    <h3 class="mt-6" :class="[sectionTitle]">
-      {{ $t('driveStyle.title') }}
-    </h3>
-    <div class="mt-2.5" :class="[cardSm]">
-      <div
-        class="text-tcu-txt-dim mb-1.5 flex items-baseline justify-between text-[11px] tracking-widest uppercase"
-      >
-        <span>{{ $t('driveStyle.sportIndex') }}</span>
-        <span class="text-tcu-txt font-mono text-xs font-semibold">{{ sportIndex }}</span>
-      </div>
-      <div class="bg-tcu-bg-3 relative h-1.5 overflow-hidden rounded-sm">
-        <div
-          class="from-mode-comfort via-accent-2 to-mode-race h-full rounded-sm bg-linear-to-r transition-[width] duration-150"
-          :style="{ width: sportBarWidth }"
-        />
-        <div class="bg-tcu-txt-dim/40 absolute top-[-2px] bottom-[-2px] left-[30%] w-0.5" />
-        <div class="bg-tcu-txt-dim/40 absolute top-[-2px] bottom-[-2px] left-[55%] w-0.5" />
-      </div>
-      <div
-        class="text-tcu-txt-dim mt-2 flex items-baseline justify-between text-[11px] tracking-widest uppercase"
-      >
-        <span>{{ $t('driveStyle.regime') }}</span>
-        <span
-          class="rounded-full px-2.5 py-0.5 text-[10px] font-bold tracking-wide uppercase"
-          :class="REGIME_PILL[sportRegime] ?? REGIME_PILL.CRUISE"
-        >
-          {{ sportRegime }}
-        </span>
-      </div>
-      <div class="text-tcu-txt-dim mt-1.5 text-[10px] leading-snug">
-        {{ $t('driveStyle.hint') }}
-      </div>
     </div>
 
     <h3 class="mt-6" :class="[sectionTitle]">

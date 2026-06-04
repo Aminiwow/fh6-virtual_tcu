@@ -191,6 +191,12 @@ class GearRatioCalibrator:
     def has_data(self, car_key: tuple) -> bool:
         return len(self.get_ratios(car_key)) >= 2
 
+    def reset_car(self, car_key: tuple):
+        self._ratios.pop(car_key, None)
+        self._counts.pop(car_key, None)
+        self._wheel_radius.pop(car_key, None)
+        self._wheel_radius_counts.pop(car_key, None)
+
     def dump(self, car_key: tuple) -> dict | None:
         if not self.has_data(car_key):
             return None

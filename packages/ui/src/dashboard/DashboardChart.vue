@@ -14,7 +14,7 @@ const { canvasRef, legend } = useDashboardChart(() => telemetry.value ?? null)
 <template>
   <div class="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-tcu-border bg-tcu-bg-1">
     <div class="flex shrink-0 items-center justify-between border-b border-tcu-border px-3 py-2">
-      <span class="text-[10px] uppercase tracking-widest text-tcu-txt-dim">Live Telemetry</span>
+      <span class="text-[10px] uppercase tracking-widest text-tcu-txt-dim">Power Curve</span>
       <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
         <div
           v-for="item in legend"

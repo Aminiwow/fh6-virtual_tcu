@@ -416,6 +416,9 @@ class PowerCurveDetector:
         fit = self._fits.get(car_key)
         return bool(fit and len(fit.points()) >= 8 and self.confidence(car_key) >= 0.20)
 
+    def reset_car(self, car_key: tuple):
+        self._fits.pop(car_key, None)
+
     def dump(self, car_key: tuple) -> dict | None:
         fit = self._fits.get(car_key)
         return fit.to_dict() if fit is not None else None

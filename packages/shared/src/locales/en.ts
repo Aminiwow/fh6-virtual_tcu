@@ -73,9 +73,17 @@ export default {
   calibration: {
     title: 'Gear Calibration',
     currentCar: 'Current car',
+    cachedCar: 'Cached car',
+    noCar: 'No car',
     calibrated: 'CALIBRATED',
     learning: 'LEARNING…',
     hint: 'Auto-learns gear ratios from telemetry. Improves shift accuracy.',
+    cachedHint: 'Showing the last detected car from before the game lost focus.',
+    clearHint: 'Clears gear ratios, power curve, rev limiter, and shift response learning for this car/tune.',
+    clearCurrentCar: 'Clear this car learning',
+    clearConfirm: 'Confirm clear learning',
+    clearDone: 'Learning cleared for this car.',
+    clearFailed: 'Clear failed. Check that the backend is connected and a car is detected.',
   },
   driveStyle: {
     title: 'Drive Style',
