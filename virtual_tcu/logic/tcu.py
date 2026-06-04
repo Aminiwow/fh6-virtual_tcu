@@ -171,6 +171,7 @@ class TCULogic:
         return (
             self._rev_limiter.dump(ck),
             ratio_signature,
+            self._shift_lag.dump(ck),
             progress.get("samples", 0),
             progress.get("points", 0),
             progress.get("min_rpm"),
@@ -1177,6 +1178,13 @@ class TCULogic:
             lead += 25.0
         if td.throttle > 0.90:
             lead += 20.0 if self.mode == Mode.RACE else 15.0
+
+        learned_rpm_gain = self._shift_lag.get_upshift_rpm_gain(td.car_key, td.gear)
+        if learned_rpm_gain is not None and self.mode == Mode.RACE:
+            learned_cap = max(85.0, learned_rpm_gain + 35.0)
+            if td.gear <= 2:
+                learned_cap += 15.0
+            lead = min(lead, learned_cap)
         return max(0.0, min(cap_rpm, lead))
 
     def _upshift_command_target_pct(
@@ -1204,7 +1212,13 @@ class TCULogic:
                 after_peak_floor = peak_power + 25.0
             command_rpm = max(command_rpm, after_peak_floor)
         if self.mode == Mode.RACE and source == "power ceiling":
-            command_rpm = max(command_rpm, target_rpm - 260.0)
+            learned_rpm_gain = self._shift_lag.get_upshift_rpm_gain(td.car_key, td.gear)
+            max_power_ceiling_lead = 260.0
+            if learned_rpm_gain is not None:
+                max_power_ceiling_lead = max(110.0, min(260.0, learned_rpm_gain + 40.0))
+                if td.gear <= 2:
+                    max_power_ceiling_lead = min(260.0, max_power_ceiling_lead + 15.0)
+            command_rpm = max(command_rpm, target_rpm - max_power_ceiling_lead)
 
         command_pct = max(0.45, min(target_pct, command_rpm / td.engine_max_rpm))
         if target_pct - command_pct < 0.002:

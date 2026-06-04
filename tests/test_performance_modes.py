@@ -375,6 +375,47 @@ def test_power_ceiling_holds_gear_when_landing_power_is_poor(tmp_path):
     assert "lead" in source
 
 
+def test_power_ceiling_uses_learned_actual_rpm_gain_for_lead(tmp_path):
+    tcu, _output = make_tcu(tmp_path, "RACE")
+    car_key = (1, 5, 900)
+    tcu._current_car_key = car_key
+    tcu._rev_limiter.load(car_key, 7499.0)
+    tcu._calibrator._ratios[car_key] = {1: 5.70, 2: 3.78}
+    tcu._calibrator._counts[car_key] = {1: 8, 2: 8}
+    tcu._rpm_rate_history.extend([3200.0, 3400.0, 3600.0])
+    tcu._power_curve.power_at_rpm = lambda _car_key, rpm: 680.0 if rpm < 5000.0 else 1740.0
+
+    for idx, gain in enumerate((115.0, 125.0, 132.0), start=1):
+        now = float(idx)
+        tcu._shift_lag.record_shift_command(
+            car_key,
+            "UP",
+            1,
+            now,
+            command_rpm=7200.0,
+        )
+        tcu._shift_lag.observe_command_frame(car_key, 1, 7200.0 + gain)
+        tcu._shift_lag.observe_gear_change(car_key, 2, now + 0.045)
+
+    td = telemetry(
+        car_ordinal=1,
+        car_class=5,
+        pi=900,
+        engine_max_rpm=8000.0,
+        current_rpm=6900.0,
+        gear=1,
+        accel_raw=255,
+    )
+
+    base_pct = tcu._upshift_base_target_pct(td, 0.884, "power ceiling", 0.900)
+    command_pct, source = tcu._upshift_command_target_pct(td, base_pct, "power ceiling")
+
+    assert base_pct * td.engine_max_rpm > 7300.0
+    assert base_pct * td.engine_max_rpm - command_pct * td.engine_max_rpm <= 220.0
+    assert command_pct * td.engine_max_rpm > 7240.0
+    assert "lead" in source
+
+
 def test_power_ceiling_stays_conservative_when_landing_power_is_close(tmp_path):
     tcu, _output = make_tcu(tmp_path, "RACE")
     car_key = (1, 5, 900)
@@ -420,6 +461,25 @@ def test_shift_lag_rejects_unresponsive_auto_control_sample():
 
     assert learner.dump(car_key) is None
     assert learner.get_upshift_lag(car_key) == ShiftLagLearner.DEFAULT_UPSHIFT_LAG
+
+
+def test_shift_lag_learns_and_persists_actual_upshift_rpm_gain():
+    learner = ShiftLagLearner()
+    car_key = (1, 5, 900)
+
+    for idx, gain in enumerate((110.0, 125.0, 145.0), start=1):
+        now = float(idx)
+        learner.record_shift_command(car_key, "UP", 1, now, command_rpm=7000.0)
+        learner.observe_command_frame(car_key, 1, 7000.0 + gain)
+        learner.observe_gear_change(car_key, 2, now + 0.040)
+
+    assert learner.get_upshift_rpm_gain(car_key, 1) == 125.0
+
+    dumped = learner.dump(car_key)
+    restored = ShiftLagLearner()
+    restored.load(car_key, dumped)
+
+    assert restored.get_upshift_rpm_gain(car_key, 1) == 125.0
 
 
 def test_race_upshift_lead_caps_learned_200ms_lag(tmp_path):
