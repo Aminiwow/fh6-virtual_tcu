@@ -14,6 +14,8 @@ class ShiftLagLearner:
     VALID_LAG_RANGE = (0.020, 0.350)
     DEFAULT_UPSHIFT_LAG = 0.090
     DEFAULT_DOWNSHIFT_LAG = 0.035
+    MIN_UNRESPONSIVE_UPSHIFT_LAG = 0.080
+    MAX_POST_COMMAND_RPM_GAIN = 220.0
 
     def __init__(self):
         self._upshift_lags: dict[tuple, deque[float]] = {}
@@ -22,19 +24,46 @@ class ShiftLagLearner:
         self._last_shift_command_gear: int | None = None
         self._last_shift_direction: str | None = None
         self._last_shift_command_car_key: tuple | None = None
+        self._last_shift_command_rpm: float | None = None
+        self._last_shift_command_peak_rpm: float | None = None
 
-    def record_shift_command(self, car_key: tuple, direction: str, gear: int, now: float):
+    def record_shift_command(
+        self,
+        car_key: tuple,
+        direction: str,
+        gear: int,
+        now: float,
+        *,
+        command_rpm: float | None = None,
+    ):
         """Record when a shift command was sent."""
         self._last_shift_command_time = now
         self._last_shift_command_gear = gear
         self._last_shift_direction = direction
         self._last_shift_command_car_key = car_key
+        self._last_shift_command_rpm = command_rpm if command_rpm and command_rpm > 0 else None
+        self._last_shift_command_peak_rpm = self._last_shift_command_rpm
 
     def _clear_last_shift_command(self):
         self._last_shift_command_time = None
         self._last_shift_command_gear = None
         self._last_shift_direction = None
         self._last_shift_command_car_key = None
+        self._last_shift_command_rpm = None
+        self._last_shift_command_peak_rpm = None
+
+    def observe_command_frame(self, car_key: tuple, gear: int, rpm: float):
+        """Track same-gear RPM after a command to reject auto-mode drag samples."""
+        if (
+            self._last_shift_command_time is None
+            or self._last_shift_direction != "UP"
+            or self._last_shift_command_car_key != car_key
+            or self._last_shift_command_gear != gear
+            or rpm <= 0
+        ):
+            return
+        peak = self._last_shift_command_peak_rpm or rpm
+        self._last_shift_command_peak_rpm = max(peak, rpm)
 
     def observe_gear_change(self, car_key: tuple, new_gear: int, now: float):
         """Observe a telemetry gear change and store a valid latency sample."""
@@ -58,9 +87,19 @@ class ShiftLagLearner:
 
         lag = now - self._last_shift_command_time
         direction = self._last_shift_direction
+        command_rpm = self._last_shift_command_rpm
+        peak_rpm = self._last_shift_command_peak_rpm
         self._clear_last_shift_command()
 
         if not (self.VALID_LAG_RANGE[0] <= lag <= self.VALID_LAG_RANGE[1]):
+            return
+        if (
+            direction == "UP"
+            and lag >= self.MIN_UNRESPONSIVE_UPSHIFT_LAG
+            and command_rpm is not None
+            and peak_rpm is not None
+            and peak_rpm - command_rpm > self.MAX_POST_COMMAND_RPM_GAIN
+        ):
             return
 
         if direction == "UP":
@@ -77,7 +116,7 @@ class ShiftLagLearner:
             return self.DEFAULT_UPSHIFT_LAG
 
         sorted_samples = sorted(samples)
-        idx = min(len(sorted_samples) - 1, round((len(sorted_samples) - 1) * 0.70))
+        idx = min(len(sorted_samples) - 1, round((len(sorted_samples) - 1) * 0.30))
         return sorted_samples[idx]
 
     def get_downshift_lag(self, car_key: tuple) -> float:

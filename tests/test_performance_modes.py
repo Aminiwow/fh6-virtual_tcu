@@ -359,7 +359,20 @@ def test_shift_lag_accepts_forza_execution_delay_samples():
     assert abs(learner.get_upshift_lag(car_key) - 0.220) < 0.001
 
 
-def test_race_upshift_lead_uses_learned_200ms_lag(tmp_path):
+def test_shift_lag_rejects_unresponsive_auto_control_sample():
+    learner = ShiftLagLearner()
+    car_key = (1, 5, 900)
+
+    learner.record_shift_command(car_key, "UP", 1, 1.0, command_rpm=6650.0)
+    learner.observe_command_frame(car_key, 1, 6900.0)
+    learner.observe_command_frame(car_key, 1, 7240.0)
+    learner.observe_gear_change(car_key, 2, 1.245)
+
+    assert learner.dump(car_key) is None
+    assert learner.get_upshift_lag(car_key) == ShiftLagLearner.DEFAULT_UPSHIFT_LAG
+
+
+def test_race_upshift_lead_caps_learned_200ms_lag(tmp_path):
     tcu, _output = make_tcu(tmp_path, "RACE")
     car_key = (1, 5, 900)
     tcu._current_car_key = car_key
@@ -379,7 +392,7 @@ def test_race_upshift_lead_uses_learned_200ms_lag(tmp_path):
         )
     )
 
-    assert lead_rpm >= 600.0
+    assert 350.0 <= lead_rpm <= 420.0
 
 
 def test_race_upshift_uses_power_peak_when_cross_unavailable(tmp_path):

@@ -618,6 +618,8 @@ class TCULogic:
             self._tcu_state_sub = "Forza mid-shift"
             return
 
+        self._shift_lag.observe_command_frame(td.car_key, td.gear, td.current_rpm)
+
         if td.gear != self._prev_gear and td.gear > 0 and self._prev_gear > 0:
             # 记录档位变化用于延迟学习
             self._shift_lag.observe_gear_change(td.car_key, td.gear, now)
@@ -898,7 +900,13 @@ class TCULogic:
         self._shift_count += 1
 
         # 记录换挡指令时刻（用于延迟学习）
-        self._shift_lag.record_shift_command(td.car_key, "UP", td.gear, now)
+        self._shift_lag.record_shift_command(
+            td.car_key,
+            "UP",
+            td.gear,
+            now,
+            command_rpm=td.current_rpm,
+        )
 
         self._kb.shift_up()
         self._logger.mark_event()
@@ -1123,15 +1131,16 @@ class TCULogic:
         # create an unreachable or overly early target.
         rise_rate = self._rpm_rise_rate()
         learned_lag = self._shift_lag.get_upshift_lag(td.car_key)
-        base = 185.0
-        margin = rise_rate * max(0.035, learned_lag * 0.35)
+        trusted_lag = min(learned_lag, 0.140)
+        base = 145.0
+        margin = rise_rate * max(0.030, trusted_lag * 0.30)
         if td.gear <= 2:
-            margin += 40.0
+            margin += 30.0
         elif td.gear == 3:
-            margin += 25.0
-        if td.throttle > 0.90:
             margin += 20.0
-        return max(200.0, min(480.0, base + margin))
+        if td.throttle > 0.90:
+            margin += 15.0
+        return max(200.0, min(360.0, base + margin))
 
     def _upshift_lead_rpm(self, td: Telemetry) -> float:
         if td.engine_max_rpm <= 0 or td.throttle < 0.55 or td.brake > 0.05:
@@ -1144,9 +1153,9 @@ class TCULogic:
         learned_lag = self._shift_lag.get_upshift_lag(td.car_key)
 
         if self.mode == Mode.RACE:
-            latency_s = max(0.090, learned_lag)
-            cap_rpm = 620.0
-            base_rpm = 85.0
+            latency_s = max(0.045, min(learned_lag, 0.140))
+            cap_rpm = 420.0
+            base_rpm = 35.0
         elif self.mode == Mode.OFFROAD:
             latency_s = max(0.050, learned_lag * 0.8)  # 越野略快
             cap_rpm = 260.0
@@ -1158,11 +1167,11 @@ class TCULogic:
 
         lead = base_rpm + rise_rate * latency_s
         if td.gear <= 2:
-            lead += 80.0
+            lead += 45.0 if self.mode == Mode.RACE else 80.0
         elif td.gear == 3 and self.mode == Mode.RACE:
-            lead += 45.0
+            lead += 25.0
         if td.throttle > 0.90:
-            lead += 35.0 if self.mode == Mode.RACE else 15.0
+            lead += 20.0 if self.mode == Mode.RACE else 15.0
         return max(0.0, min(cap_rpm, lead))
 
     def _upshift_command_target_pct(
@@ -1182,13 +1191,21 @@ class TCULogic:
         command_rpm = target_rpm - lead_rpm
         peak_power = self._power_curve.peak_power_abs_rpm(td.car_key)
         if peak_power is not None and target_rpm > peak_power:
-            after_peak_floor = peak_power + (45.0 if self.mode == Mode.RACE else 25.0)
+            if self.mode == Mode.RACE:
+                post_peak_room = target_rpm - peak_power
+                min_post_peak = max(120.0, min(260.0, post_peak_room * 0.55))
+                after_peak_floor = peak_power + min(min_post_peak, max(0.0, post_peak_room - 80.0))
+            else:
+                after_peak_floor = peak_power + 25.0
             command_rpm = max(command_rpm, after_peak_floor)
+        if self.mode == Mode.RACE and source == "power ceiling":
+            command_rpm = max(command_rpm, target_rpm - 260.0)
 
         command_pct = max(0.45, min(target_pct, command_rpm / td.engine_max_rpm))
         if target_pct - command_pct < 0.002:
             return target_pct, source
-        return command_pct, f"{source} lead -{lead_rpm:.0f}"
+        applied_lead_rpm = max(0.0, target_rpm - command_pct * td.engine_max_rpm)
+        return command_pct, f"{source} lead -{applied_lead_rpm:.0f}"
 
     def _record_decision(self, event: str, td: Telemetry, **extra):
         data = {
