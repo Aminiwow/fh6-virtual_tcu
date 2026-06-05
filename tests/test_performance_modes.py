@@ -544,7 +544,7 @@ def test_race_first_gear_traction_hold_releases_when_speed_catches_up_cleanly(tm
     assert tcu._tcu_state == "UPSHIFT"
 
 
-def test_race_fuel_cut_escape_still_bypasses_traction_hold(tmp_path):
+def test_race_fuel_cut_escape_holds_during_severe_traction_loss(tmp_path):
     tcu, output = make_tcu(tmp_path, "RACE")
     car_key = (4197, 7, 999)
     tcu._current_car_key = car_key
@@ -552,6 +552,8 @@ def test_race_fuel_cut_escape_still_bypasses_traction_hold(tmp_path):
     tcu._calibrator._counts[car_key] = {1: 8, 2: 8}
     tcu._calibrator._wheel_radius[car_key] = 0.34
     tcu._calibrator._wheel_radius_counts[car_key] = 8
+    events = []
+    tcu._logger.record_decision = events.append
 
     tcu._mode_race(
         telemetry(
@@ -568,6 +570,68 @@ def test_race_fuel_cut_escape_still_bypasses_traction_hold(tmp_path):
             slip_fr=40.0,
             slip_rl=37.0,
             slip_rr=36.0,
+        ),
+        time.time(),
+    )
+
+    assert output.up == 0
+    assert tcu._tcu_state == "TRACTION HOLD"
+    assert events[-1]["event"] == "race_slip_hold"
+    assert events[-1]["hold_reason"] == "fuel cut"
+
+
+def test_race_second_gear_fuel_cut_escape_holds_when_wheelspin_continues(tmp_path):
+    tcu, output = make_tcu(tmp_path, "RACE")
+    car_key = (4197, 7, 999)
+    tcu._current_car_key = car_key
+    events = []
+    tcu._logger.record_decision = events.append
+
+    tcu._mode_race(
+        telemetry(
+            car_ordinal=4197,
+            car_class=7,
+            pi=999,
+            engine_max_rpm=8000.0,
+            current_rpm=7190.0,
+            gear=2,
+            speed_ms=40.6 / 3.6,
+            accel_raw=255,
+            power_w=-390000.0,
+            slip_fl=26.0,
+            slip_fr=25.0,
+            slip_rl=24.0,
+            slip_rr=23.0,
+        ),
+        time.time(),
+    )
+
+    assert output.up == 0
+    assert tcu._tcu_state == "TRACTION HOLD"
+    assert events[-1]["event"] == "race_slip_hold"
+    assert events[-1]["hold_reason"] == "fuel cut"
+
+
+def test_race_fuel_cut_escape_still_shifts_when_traction_is_clean(tmp_path):
+    tcu, output = make_tcu(tmp_path, "RACE")
+    car_key = (4197, 7, 999)
+    tcu._current_car_key = car_key
+
+    tcu._mode_race(
+        telemetry(
+            car_ordinal=4197,
+            car_class=7,
+            pi=999,
+            engine_max_rpm=8000.0,
+            current_rpm=6900.0,
+            gear=1,
+            speed_ms=42.0 / 3.6,
+            accel_raw=255,
+            power_w=-120000.0,
+            slip_fl=0.5,
+            slip_fr=0.4,
+            slip_rl=0.4,
+            slip_rr=0.3,
         ),
         time.time(),
     )

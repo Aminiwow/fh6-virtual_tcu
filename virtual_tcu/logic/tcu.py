@@ -1129,6 +1129,9 @@ class TCULogic:
         if td.current_rpm < escape_rpm:
             return False
 
+        if self.mode == Mode.RACE and self._race_wheel_speed_untrusted(td, now):
+            return self._race_wheel_speed_hold(td, now, "fuel cut")
+
         old_no_upshift_until = self._no_upshift_until
         self._no_upshift_until = min(self._no_upshift_until, now)
         hold_after_escape = (
