@@ -23,6 +23,7 @@ class AirtimeDetector:
     SLIP_VOTE_THRESHOLD = 1.2
     SUSPENSION_AIRBORNE_THRESHOLD = 0.06
     SUSPENSION_GROUNDED_THRESHOLD = 0.12
+    FALLBACK_SUSPENSION_AIRBORNE_THRESHOLD = 0.35
     MIN_SPEED_FOR_AIRBORNE = 5.0
     ACCEL_MIN_SPEED_KMH = 12.0
     VERTICAL_SPEED_AIRBORNE_MS = 2.2
@@ -66,26 +67,34 @@ class AirtimeDetector:
             for slip in (td.slip_fl, td.slip_fr, td.slip_rl, td.slip_rr)
             if abs(slip) > self.SLIP_VOTE_THRESHOLD
         )
+        suspension_grounded_evidence = td.min_suspension_norm >= self.SUSPENSION_GROUNDED_THRESHOLD
         vertical_airborne = (
             td.speed_kmh > 20.0
             and low_g
             and td.brake < 0.35
             and abs(td.vel_y) >= self.VERTICAL_SPEED_AIRBORNE_MS
             and slip_votes >= 2
+            and not suspension_grounded_evidence
+        )
+        fallback_has_airborne_motion = abs(td.vel_y) >= self.VERTICAL_SPEED_GROUNDED_MS
+        fallback_has_suspension_extension = (
+            max(td.suspension_norm) <= self.FALLBACK_SUSPENSION_AIRBORNE_THRESHOLD
         )
         fallback_airborne = (
             td.speed_kmh > 20.0
             and low_g
             and td.brake < 0.25
             and (all_spin or slip_votes >= 3)
+            and (fallback_has_airborne_motion or fallback_has_suspension_extension)
+            and not suspension_grounded_evidence
         )
         airborne_now = (
             suspension_airborne or accel_airborne or vertical_airborne or fallback_airborne
         )
 
-        suspension_grounded = td.speed_kmh <= self.MIN_SPEED_FOR_AIRBORNE or (
-            td.min_suspension_norm >= self.SUSPENSION_GROUNDED_THRESHOLD
-            and abs(td.vel_y) <= self.VERTICAL_SPEED_GROUNDED_MS
+        suspension_grounded = (
+            td.speed_kmh <= self.MIN_SPEED_FOR_AIRBORNE
+            or td.min_suspension_norm >= self.SUSPENSION_GROUNDED_THRESHOLD
         )
         accel_grounded = (
             was_airborne

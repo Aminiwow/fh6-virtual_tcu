@@ -783,7 +783,8 @@ class TCULogic:
                 self._no_downshift_until = 0.0
                 self._no_predictive_until = 0.0
                 self._lock_until = min(self._lock_until, now + 0.10)
-                self._no_upshift_until = max(self._no_upshift_until, now + 0.80)
+                if not self._low_gear_limiter_guard_ready(td, now)[0]:
+                    self._no_upshift_until = max(self._no_upshift_until, now + 0.80)
         if self._config.get("feat_transient_lock"):
             self._yaw_transient.update(td, now)
         if self._config.get("feat_drive_style"):
@@ -855,6 +856,10 @@ class TCULogic:
                 return
 
         if self._config.get("feat_airtime_lock") and self._airtime.is_airborne:
+            if self._fuel_cut_escape_upshift(td, now):
+                return
+            if self._low_gear_limiter_guard_upshift(td, now):
+                return
             self._tcu_state = "AIRBORNE"
             self._tcu_state_sub = "holding decisions"
             return
@@ -925,10 +930,15 @@ class TCULogic:
         downshift_lock_s: float = 1.0,
         decision_extra: dict | None = None,
         allow_cornering_locked: bool = False,
+        allow_airborne_locked: bool = False,
     ) -> bool:
         if td.gear >= 10:
             return False
-        if self._config.get("feat_airtime_lock") and self._airtime.is_airborne:
+        if (
+            self._config.get("feat_airtime_lock")
+            and self._airtime.is_airborne
+            and not allow_airborne_locked
+        ):
             self._tcu_state = "AIRBORNE"
             self._tcu_state_sub = "upshift locked"
             return False
@@ -971,6 +981,61 @@ class TCULogic:
             self._audio_executor.submit(winsound.Beep, 3000, 40)
         return True
 
+    def _low_gear_limiter_guard_ready(self, td: Telemetry, now: float) -> tuple[bool, float]:
+        if self.mode != Mode.RACE:
+            return False, 0.0
+        if td.gear != 1 or td.engine_max_rpm <= 0:
+            return False, 0.0
+        if td.speed_kmh <= Cfg.MIN_SPEED_KMH or td.throttle < 0.80 or td.brake > 0.10:
+            return False, 0.0
+        if self._pending_upshift_gear is not None:
+            return False, 0.0
+
+        learned = self._rev_limiter.effective_redline(td)
+        if learned is not None:
+            guard_rpm = max(td.engine_max_rpm * 0.82, learned - 500.0)
+        else:
+            guard_rpm = td.engine_max_rpm * 0.88
+        return td.current_rpm >= guard_rpm, guard_rpm
+
+    def _low_gear_limiter_guard_upshift(self, td: Telemetry, now: float) -> bool:
+        ready, guard_rpm = self._low_gear_limiter_guard_ready(td, now)
+        if not ready:
+            return False
+
+        blocked_by_airtime = self._config.get("feat_airtime_lock") and self._airtime.is_airborne
+        blocked_by_upshift_lock = now < self._no_upshift_until
+        blocked_by_cornering = self._cornering_locked
+        if not (blocked_by_airtime or blocked_by_upshift_lock or blocked_by_cornering):
+            return False
+
+        old_no_upshift_until = self._no_upshift_until
+        old_lock_until = self._lock_until
+        self._no_upshift_until = min(self._no_upshift_until, now)
+        self._lock_until = min(self._lock_until, now)
+        shifted = self._shift_up(
+            td,
+            260,
+            "UPSHIFT",
+            "low gear limiter guard",
+            downshift_lock_s=0.65,
+            allow_cornering_locked=True,
+            allow_airborne_locked=True,
+            decision_extra={
+                "low_gear_limiter_guard": True,
+                "guard_rpm": round(guard_rpm, 1),
+                "airborne_guard": bool(blocked_by_airtime),
+                "previous_no_upshift_until_s": round(
+                    max(0.0, old_no_upshift_until - now),
+                    3,
+                ),
+            },
+        )
+        if not shifted:
+            self._no_upshift_until = old_no_upshift_until
+            self._lock_until = old_lock_until
+        return shifted
+
     def _fuel_cut_escape_upshift(self, td: Telemetry, now: float) -> bool:
         if td.gear < 1 or td.gear >= 10 or td.engine_max_rpm <= 0:
             return False
@@ -998,6 +1063,7 @@ class TCULogic:
             "escape",
             downshift_lock_s=0.65,
             allow_cornering_locked=True,
+            allow_airborne_locked=True,
             decision_extra={
                 "fuel_cut_escape": True,
                 "escape_rpm": round(escape_rpm, 1),
@@ -2537,6 +2603,9 @@ class TCULogic:
             return
 
         if self._fuel_cut_escape_upshift(td, now):
+            return
+
+        if self._low_gear_limiter_guard_upshift(td, now):
             return
 
         blocker = self._blocked_by_transient()

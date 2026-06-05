@@ -377,6 +377,59 @@ def test_race_fuel_cut_escape_bypasses_upshift_locks(tmp_path):
     assert tcu._tcu_state == "FUEL CUT"
 
 
+def test_race_low_gear_limiter_guard_bypasses_airtime_hold(tmp_path):
+    tcu, output = make_tcu(tmp_path, "RACE")
+    car_key = (4197, 7, 999)
+    tcu._current_car_key = car_key
+    tcu._rev_limiter.load(car_key, 7505.0)
+    tcu._airtime._is_airborne = True
+
+    tcu.process(
+        telemetry(
+            car_ordinal=4197,
+            car_class=7,
+            pi=999,
+            engine_max_rpm=8000.0,
+            current_rpm=7100.0,
+            gear=1,
+            speed_ms=65.0,
+            accel_raw=255,
+            power_w=1200000.0,
+        )
+    )
+
+    assert output.up == 1
+    assert tcu._tcu_state == "UPSHIFT"
+    assert tcu._tcu_state_sub == "low gear limiter guard"
+
+
+def test_race_low_gear_limiter_guard_bypasses_upshift_lock_before_fuel_cut(tmp_path):
+    tcu, output = make_tcu(tmp_path, "RACE")
+    car_key = (4197, 7, 999)
+    tcu._current_car_key = car_key
+    tcu._rev_limiter.load(car_key, 7505.0)
+    tcu._no_upshift_until = time.time() + 0.8
+
+    tcu._mode_race(
+        telemetry(
+            car_ordinal=4197,
+            car_class=7,
+            pi=999,
+            engine_max_rpm=8000.0,
+            current_rpm=7100.0,
+            gear=1,
+            speed_ms=65.0,
+            accel_raw=255,
+            power_w=1200000.0,
+        ),
+        time.time(),
+    )
+
+    assert output.up == 1
+    assert tcu._tcu_state == "UPSHIFT"
+    assert tcu._tcu_state_sub == "low gear limiter guard"
+
+
 def test_power_ceiling_cannot_raise_learned_limiter_ceiling(tmp_path):
     tcu, _output = make_tcu(tmp_path, "RACE")
     car_key = (1, 5, 900)
@@ -890,6 +943,60 @@ def test_brake_lockup_slip_does_not_count_as_airtime():
 
     assert not detector.is_airborne
     assert not detector.just_landed
+
+
+def test_launch_wheelspin_slip_does_not_count_as_airtime():
+    detector = AirtimeDetector()
+    launch_spin = telemetry(
+        speed_ms=22.3 / 3.6,
+        gear=1,
+        accel_raw=255,
+        accel_y=-0.64,
+        vel_y=-0.30,
+        slip_fl=11.45,
+        slip_fr=9.69,
+        slip_rl=9.99,
+        slip_rr=7.07,
+        suspension_norm_fl=0.193,
+        suspension_norm_fr=0.224,
+        suspension_norm_rl=0.653,
+        suspension_norm_rr=0.712,
+    )
+
+    for i in range(5):
+        detector.update(launch_spin, now=400.0 + i * 0.016)
+
+    assert not detector.is_airborne
+    assert not detector.just_landed
+
+
+def test_airtime_detector_grounded_suspension_releases_even_with_vertical_speed():
+    detector = AirtimeDetector()
+    airborne = telemetry(
+        speed_ms=65.0,
+        suspension_norm_fl=0.0,
+        suspension_norm_fr=0.0,
+        suspension_norm_rl=0.0,
+        suspension_norm_rr=0.0,
+    )
+    grounded = telemetry(
+        speed_ms=65.0,
+        vel_y=-1.22,
+        suspension_norm_fl=0.591,
+        suspension_norm_fr=0.584,
+        suspension_norm_rl=0.650,
+        suspension_norm_rr=0.641,
+    )
+
+    for i in range(3):
+        detector.update(airborne, now=500.0 + i * 0.016)
+    assert detector.is_airborne
+
+    detector.update(grounded, now=500.10)
+    detector.update(grounded, now=500.12)
+
+    assert not detector.is_airborne
+    assert detector.just_landed
 
 
 def test_landing_recovery_clears_downshift_lock(tmp_path):
