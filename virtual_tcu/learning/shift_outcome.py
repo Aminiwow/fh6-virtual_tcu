@@ -53,11 +53,13 @@ class ShiftOutcomeLearner:
     MAX_SAMPLES = 24
     MAX_OFFSET_RPM = 250.0
     STEP_RPM = 25.0
+    LOW_POWER_STEP_RPM = 50.0
     PROBE_RPM = 40.0
     MIN_COMPARE_SAMPLES = 6
+    MIN_POWER_BAND_SAMPLES = 2
     MIN_SIDE_SAMPLES = 2
     MIN_OFFSET_SPAN_RPM = 60.0
-    MIN_NEW_SAMPLES_AFTER_ADJUST = 3
+    MIN_NEW_SAMPLES_AFTER_ADJUST = 2
     REWARD_MARGIN_KMH_S = 0.35
     LOW_GEAR_OBSERVE_AFTER_S = 0.32
     HIGH_GEAR_OBSERVE_AFTER_S = 0.42
@@ -184,9 +186,6 @@ class ShiftOutcomeLearner:
         if elapsed > self.MAX_OBSERVE_AFTER_S or td.gear != command.to_gear:
             self.cancel_pending()
             return None
-        if not clean:
-            self.cancel_pending()
-            return None
 
         observe_after = (
             self.LOW_GEAR_OBSERVE_AFTER_S
@@ -194,6 +193,9 @@ class ShiftOutcomeLearner:
             else self.HIGH_GEAR_OBSERVE_AFTER_S
         )
         if elapsed < observe_after:
+            return None
+        if not clean:
+            self.cancel_pending()
             return None
 
         speed_gain = td.speed_kmh - pending.confirm_speed_kmh
@@ -356,9 +358,28 @@ class ShiftOutcomeLearner:
         samples = list(self._samples.get(key, ()))
         sample_count = len(samples)
         current = self._offsets.get(key, 0.0)
+        new_samples = sample_count - self._last_adjust_count.get(key, 0)
+        if new_samples >= self.MIN_NEW_SAMPLES_AFTER_ADJUST:
+            recent = samples[-min(4, len(samples)) :]
+            landing_ratios = [
+                sample["landing_power_ratio"]
+                for sample in recent
+                if "landing_power_ratio" in sample
+            ]
+            if (
+                len(landing_ratios) >= self.MIN_POWER_BAND_SAMPLES
+                and mean(landing_ratios) < 0.80
+            ):
+                return self._move_offset(
+                    key,
+                    self.LOW_POWER_STEP_RPM,
+                    "next gear lands below power band",
+                    reward_delta=None,
+                )
+
         if sample_count < self.MIN_COMPARE_SAMPLES:
             return ShiftOutcomeUpdate(False, current, "", sample_count)
-        if sample_count - self._last_adjust_count.get(key, 0) < self.MIN_NEW_SAMPLES_AFTER_ADJUST:
+        if new_samples < self.MIN_NEW_SAMPLES_AFTER_ADJUST:
             return ShiftOutcomeUpdate(False, current, "", sample_count)
 
         offsets = [sample["applied_offset_rpm"] for sample in samples]
@@ -399,20 +420,6 @@ class ShiftOutcomeLearner:
                         "earlier samples accelerate better",
                         reward_delta=reward_delta,
                     )
-
-        recent = samples[-min(5, len(samples)) :]
-        landing_ratios = [
-            sample["landing_power_ratio"]
-            for sample in recent
-            if "landing_power_ratio" in sample
-        ]
-        if len(landing_ratios) >= 3 and mean(landing_ratios) < 0.80:
-            return self._move_offset(
-                key,
-                self.STEP_RPM,
-                "next gear lands below power band",
-                reward_delta=None,
-            )
 
         return ShiftOutcomeUpdate(False, current, "", sample_count)
 

@@ -1306,6 +1306,136 @@ def test_shift_outcome_learner_moves_toward_better_side():
     assert learner.base_offset_rpm(car_key, 1) == 25.0
 
 
+def test_shift_outcome_waits_through_dirty_settle_before_sampling():
+    learner = ShiftOutcomeLearner()
+    car_key = (1, 5, 900)
+    now = 100.0
+
+    learner.record_command(
+        car_key,
+        1,
+        now,
+        command_rpm=7200.0,
+        command_speed_kmh=130.0,
+        target_rpm=7200.0,
+        nominal_target_rpm=7200.0,
+        applied_offset_rpm=0.0,
+        source="power ceiling",
+    )
+    assert learner.confirm_upshift(
+        car_key,
+        2,
+        now + 0.05,
+        landing_rpm=4300.0,
+        landing_speed_kmh=131.0,
+        landing_power_ratio=0.72,
+    )
+
+    dirty_settle = telemetry(
+        car_ordinal=1,
+        car_class=5,
+        pi=900,
+        gear=2,
+        speed_ms=132.0 / 3.6,
+        current_rpm=4400.0,
+        accel_raw=255,
+        power_w=-100000.0,
+    )
+    assert learner.observe(dirty_settle, now + 0.12, clean=False) is None
+    assert learner.sample_count(car_key, 1) == 0
+
+    clean_pull = telemetry(
+        car_ordinal=1,
+        car_class=5,
+        pi=900,
+        gear=2,
+        speed_ms=146.0 / 3.6,
+        current_rpm=5200.0,
+        accel_raw=255,
+        power_w=900000.0,
+    )
+    update = learner.observe(clean_pull, now + 0.40, clean=True)
+
+    assert update is not None
+    assert update.sample_count == 1
+    assert learner.sample_count(car_key, 1) == 1
+
+
+def test_shift_outcome_moves_later_when_next_gear_lands_below_power_band():
+    learner = ShiftOutcomeLearner()
+    car_key = (1, 5, 900)
+
+    learner.record_sample(
+        car_key,
+        1,
+        applied_offset_rpm=0.0,
+        reward_kmh_s=18.0,
+        landing_power_ratio=0.72,
+    )
+    update = learner.record_sample(
+        car_key,
+        1,
+        applied_offset_rpm=0.0,
+        reward_kmh_s=18.4,
+        landing_power_ratio=0.74,
+    )
+
+    assert update.changed
+    assert update.reason == "next gear lands below power band"
+    assert update.offset_rpm == 50.0
+    assert learner.base_offset_rpm(car_key, 1) == 50.0
+
+
+def test_tcu_records_shift_outcome_after_post_shift_settle(tmp_path):
+    tcu, _output = make_tcu(tmp_path, "RACE")
+    car_key = (1, 5, 900)
+    tcu._current_car_key = car_key
+    tcu._prev_gear = 1
+    tcu._pending_upshift_gear = 2
+    tcu._pending_upshift_until = time.time() + 0.8
+    tcu._shift_outcome.record_command(
+        car_key,
+        1,
+        time.time(),
+        command_rpm=7200.0,
+        command_speed_kmh=130.0,
+        target_rpm=7200.0,
+        nominal_target_rpm=7200.0,
+        applied_offset_rpm=0.0,
+        source="power ceiling",
+    )
+
+    tcu.process(
+        telemetry(
+            car_ordinal=car_key[0],
+            car_class=car_key[1],
+            pi=car_key[2],
+            gear=2,
+            current_rpm=4300.0,
+            speed_ms=131.0 / 3.6,
+            accel_raw=255,
+            power_w=-100000.0,
+        )
+    )
+    assert tcu._shift_outcome.sample_count(car_key, 1) == 0
+
+    tcu._shift_outcome._pending_observation.confirm_time = time.time() - 0.40
+    tcu.process(
+        telemetry(
+            car_ordinal=car_key[0],
+            car_class=car_key[1],
+            pi=car_key[2],
+            gear=2,
+            current_rpm=5200.0,
+            speed_ms=146.0 / 3.6,
+            accel_raw=255,
+            power_w=900000.0,
+        )
+    )
+
+    assert tcu._shift_outcome.sample_count(car_key, 1) == 1
+
+
 def test_race_shift_outcome_offset_affects_upshift_target(tmp_path):
     tcu, output = make_tcu(tmp_path, "RACE")
     seed_ratios(tcu)
