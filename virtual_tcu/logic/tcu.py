@@ -112,6 +112,8 @@ class TCULogic:
         self._discord_rpc = DiscordRPC() if config.get("feat_discord_rpc") else None
         self._last_decision = {"rule": "", "reason": "", "blocked_by": None}
         self._last_traction_hold_log_at = 0.0
+        self._race_slip_hold_until = 0.0
+        self._last_race_slip_hold_log_at = 0.0
 
         self._tcu_state = "STANDBY"
         self._tcu_state_sub = ""
@@ -929,8 +931,14 @@ class TCULogic:
             self._tcu_state_sub = "holding decisions"
             return
 
+        if self.mode == Mode.RACE and self._fuel_cut_escape_upshift(td, now):
+            return
+
         min_sensible_speed = self._min_sensible_speed_for_gear(td)
         if td.gear >= 2 and td.speed_kmh < min_sensible_speed and td.rpm_pct < 0.40:
+            if self._race_wheel_speed_untrusted(td, now):
+                self._race_wheel_speed_hold(td, now, "mismatch")
+                return
             self._tcu_state = "GEAR MISMATCH"
             self._tcu_state_sub = f"too high for {td.speed_kmh:.0f} km/h"
             self._no_downshift_until = 0.0
@@ -1067,6 +1075,8 @@ class TCULogic:
         ready, guard_rpm = self._low_gear_limiter_guard_ready(td, now)
         if not ready:
             return False
+        if self._race_wheel_speed_untrusted(td, now):
+            return self._race_wheel_speed_hold(td, now, "limiter guard")
 
         blocked_by_airtime = self._config.get("feat_airtime_lock") and self._airtime.is_airborne
         blocked_by_upshift_lock = now < self._no_upshift_until
@@ -1121,6 +1131,9 @@ class TCULogic:
 
         old_no_upshift_until = self._no_upshift_until
         self._no_upshift_until = min(self._no_upshift_until, now)
+        hold_after_escape = (
+            self.mode == Mode.RACE and td.max_combined_slip >= 4.0 and td.throttle >= 0.55
+        )
         shifted = self._shift_up(
             td,
             260,
@@ -1133,10 +1146,13 @@ class TCULogic:
                 "fuel_cut_escape": True,
                 "escape_rpm": round(escape_rpm, 1),
                 "previous_no_upshift_until_s": round(max(0.0, old_no_upshift_until - now), 3),
+                "race_slip_hold_after_escape": hold_after_escape,
             },
         )
         if not shifted:
             self._no_upshift_until = old_no_upshift_until
+        elif hold_after_escape:
+            self._race_slip_hold_until = max(self._race_slip_hold_until, now + 0.70)
         return shifted
 
     def _shift_down(
@@ -1643,6 +1659,37 @@ class TCULogic:
             )
         return True
 
+    def _race_wheel_speed_untrusted(self, td: Telemetry, now: float) -> bool:
+        if self.mode != Mode.RACE:
+            return False
+        if td.gear < 1 or td.engine_max_rpm <= 0 or td.speed_kmh <= Cfg.MIN_SPEED_KMH:
+            return False
+        if td.brake > 0.12:
+            return False
+        if self._config.get("feat_airtime_lock") and self._airtime.is_airborne:
+            return False
+        severe_slip = td.max_combined_slip >= 4.0 and td.throttle >= 0.55
+        lingering_slip = now < self._race_slip_hold_until and td.throttle >= 0.35
+        if severe_slip:
+            self._race_slip_hold_until = max(self._race_slip_hold_until, now + 0.70)
+            return True
+        return lingering_slip
+
+    def _race_wheel_speed_hold(self, td: Telemetry, now: float, reason: str) -> bool:
+        self._tcu_state = "TRACTION HOLD"
+        self._tcu_state_sub = f"wheel speed untrusted ({reason})"
+        self._no_upshift_until = max(self._no_upshift_until, now + 0.20)
+        self._shift_outcome.cancel_pending()
+        if now - self._last_race_slip_hold_log_at >= 0.35:
+            self._last_race_slip_hold_log_at = now
+            self._record_decision(
+                "race_slip_hold",
+                td,
+                hold_reason=reason,
+                hold_until_s=round(max(0.0, self._race_slip_hold_until - now), 3),
+            )
+        return True
+
     def _race_shift_outcome_offset_rpm(self, td: Telemetry) -> float:
         if not self._race_shift_outcome_sample_clean(td):
             return 0.0
@@ -2072,6 +2119,8 @@ class TCULogic:
             return False
         if td.rpm_pct >= floor_pct:
             return False
+        if block_spin and self._race_wheel_speed_untrusted(td, now):
+            return self._race_wheel_speed_hold(td, now, "power down")
         if block_spin and td.max_combined_slip > 2.4 and td.rpm_pct > 0.45:
             return False
 
@@ -2252,6 +2301,9 @@ class TCULogic:
 
         if self._race_first_gear_traction_hold(td, now):
             return True
+
+        if self._race_wheel_speed_untrusted(td, now):
+            return self._race_wheel_speed_hold(td, now, "upshift")
 
         if self.mode == Mode.RACE:
             self._race_shift_outcome_offset_rpm(td)

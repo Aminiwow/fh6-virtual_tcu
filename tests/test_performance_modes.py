@@ -470,7 +470,46 @@ def test_race_first_gear_wheelspin_holds_low_speed_upshift(tmp_path):
     assert events[-1]["event"] == "traction_hold"
 
 
-def test_race_first_gear_traction_hold_releases_when_speed_catches_up(tmp_path):
+def test_race_first_gear_traction_hold_continues_when_speed_catches_up_but_slips(tmp_path):
+    tcu, output = make_tcu(tmp_path, "RACE")
+    car_key = (4197, 7, 999)
+    tcu._current_car_key = car_key
+    tcu._calibrator._ratios[car_key] = {1: 3.50, 2: 2.68}
+    tcu._calibrator._counts[car_key] = {1: 8, 2: 8}
+    tcu._calibrator._wheel_radius[car_key] = 0.34
+    tcu._calibrator._wheel_radius_counts[car_key] = 8
+    tcu._performance_upshift_target_pct = lambda _td, _offset: (0.854, "power ceiling")
+    events = []
+    tcu._logger.record_decision = events.append
+
+    shifted_or_held = tcu._track_upshift_in_band(
+        telemetry(
+            car_ordinal=4197,
+            car_class=7,
+            pi=999,
+            engine_max_rpm=8000.0,
+            current_rpm=6840.0,
+            gear=1,
+            speed_ms=75.0 / 3.6,
+            accel_raw=255,
+            power_w=1297000.0,
+            slip_fl=8.0,
+            slip_fr=7.5,
+            slip_rl=7.0,
+            slip_rr=6.5,
+        ),
+        time.time(),
+        offset=0.03,
+    )
+
+    assert shifted_or_held
+    assert output.up == 0
+    assert tcu._tcu_state == "TRACTION HOLD"
+    assert events[-1]["event"] == "race_slip_hold"
+    assert events[-1]["hold_reason"] == "upshift"
+
+
+def test_race_first_gear_traction_hold_releases_when_speed_catches_up_cleanly(tmp_path):
     tcu, output = make_tcu(tmp_path, "RACE")
     car_key = (4197, 7, 999)
     tcu._current_car_key = car_key
@@ -491,10 +530,10 @@ def test_race_first_gear_traction_hold_releases_when_speed_catches_up(tmp_path):
             speed_ms=75.0 / 3.6,
             accel_raw=255,
             power_w=1297000.0,
-            slip_fl=8.0,
-            slip_fr=7.5,
-            slip_rl=7.0,
-            slip_rr=6.5,
+            slip_fl=0.8,
+            slip_fr=0.7,
+            slip_rl=0.7,
+            slip_rr=0.6,
         ),
         time.time(),
         offset=0.03,
