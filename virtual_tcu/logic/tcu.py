@@ -111,6 +111,7 @@ class TCULogic:
         self._watchdog = Watchdog()
         self._discord_rpc = DiscordRPC() if config.get("feat_discord_rpc") else None
         self._last_decision = {"rule": "", "reason": "", "blocked_by": None}
+        self._last_traction_hold_log_at = 0.0
 
         self._tcu_state = "STANDBY"
         self._tcu_state_sub = ""
@@ -1604,6 +1605,44 @@ class TCULogic:
             return False
         return td.speed_kmh > Cfg.MIN_SPEED_KMH
 
+    def _race_first_gear_traction_hold(self, td: Telemetry, now: float) -> bool:
+        if self.mode != Mode.RACE or td.gear != 1 or td.engine_max_rpm <= 0:
+            return False
+        if td.throttle < 0.80 or td.brake > 0.05 or td.speed_kmh <= Cfg.MIN_SPEED_KMH:
+            return False
+        if self._pending_upshift_gear is not None:
+            return False
+        if td.power_w < -5000.0:
+            return False
+        if td.max_combined_slip < 4.0:
+            return False
+
+        projected_speed = self._calibrator.speed_for_rpm(
+            td.car_key,
+            1,
+            min(td.current_rpm, td.engine_max_rpm * 0.95),
+        )
+        if projected_speed is not None:
+            hold_until_speed = max(38.0, min(72.0, projected_speed * 0.35))
+        else:
+            hold_until_speed = 55.0
+        if td.speed_kmh >= hold_until_speed:
+            return False
+
+        self._tcu_state = "TRACTION HOLD"
+        self._tcu_state_sub = f"1st wheelspin {td.speed_kmh:.0f}<{hold_until_speed:.0f} km/h"
+        if now - self._last_traction_hold_log_at >= 0.35:
+            self._last_traction_hold_log_at = now
+            self._record_decision(
+                "traction_hold",
+                td,
+                hold_until_speed_kmh=round(hold_until_speed, 1),
+                projected_gear_speed_kmh=round(projected_speed, 1)
+                if projected_speed is not None
+                else None,
+            )
+        return True
+
     def _race_shift_outcome_offset_rpm(self, td: Telemetry) -> float:
         if not self._race_shift_outcome_sample_clean(td):
             return 0.0
@@ -2210,6 +2249,9 @@ class TCULogic:
             return False
         if td.speed_kmh <= Cfg.MIN_SPEED_KMH:
             return False
+
+        if self._race_first_gear_traction_hold(td, now):
+            return True
 
         if self.mode == Mode.RACE:
             self._race_shift_outcome_offset_rpm(td)

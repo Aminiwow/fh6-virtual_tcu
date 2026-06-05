@@ -432,6 +432,111 @@ def test_race_low_gear_limiter_guard_bypasses_upshift_lock_before_fuel_cut(tmp_p
     assert tcu._tcu_state_sub == "low gear limiter guard"
 
 
+def test_race_first_gear_wheelspin_holds_low_speed_upshift(tmp_path):
+    tcu, output = make_tcu(tmp_path, "RACE")
+    car_key = (4197, 7, 999)
+    tcu._current_car_key = car_key
+    tcu._calibrator._ratios[car_key] = {1: 3.50, 2: 2.68}
+    tcu._calibrator._counts[car_key] = {1: 8, 2: 8}
+    tcu._calibrator._wheel_radius[car_key] = 0.34
+    tcu._calibrator._wheel_radius_counts[car_key] = 8
+    tcu._performance_upshift_target_pct = lambda _td, _offset: (0.854, "power ceiling")
+    events = []
+    tcu._logger.record_decision = events.append
+
+    shifted_or_held = tcu._track_upshift_in_band(
+        telemetry(
+            car_ordinal=4197,
+            car_class=7,
+            pi=999,
+            engine_max_rpm=8000.0,
+            current_rpm=6840.0,
+            gear=1,
+            speed_ms=42.0 / 3.6,
+            accel_raw=255,
+            power_w=1297000.0,
+            slip_fl=41.0,
+            slip_fr=40.0,
+            slip_rl=37.0,
+            slip_rr=36.0,
+        ),
+        time.time(),
+        offset=0.03,
+    )
+
+    assert shifted_or_held
+    assert output.up == 0
+    assert tcu._tcu_state == "TRACTION HOLD"
+    assert events[-1]["event"] == "traction_hold"
+
+
+def test_race_first_gear_traction_hold_releases_when_speed_catches_up(tmp_path):
+    tcu, output = make_tcu(tmp_path, "RACE")
+    car_key = (4197, 7, 999)
+    tcu._current_car_key = car_key
+    tcu._calibrator._ratios[car_key] = {1: 3.50, 2: 2.68}
+    tcu._calibrator._counts[car_key] = {1: 8, 2: 8}
+    tcu._calibrator._wheel_radius[car_key] = 0.34
+    tcu._calibrator._wheel_radius_counts[car_key] = 8
+    tcu._performance_upshift_target_pct = lambda _td, _offset: (0.854, "power ceiling")
+
+    shifted = tcu._track_upshift_in_band(
+        telemetry(
+            car_ordinal=4197,
+            car_class=7,
+            pi=999,
+            engine_max_rpm=8000.0,
+            current_rpm=6840.0,
+            gear=1,
+            speed_ms=75.0 / 3.6,
+            accel_raw=255,
+            power_w=1297000.0,
+            slip_fl=8.0,
+            slip_fr=7.5,
+            slip_rl=7.0,
+            slip_rr=6.5,
+        ),
+        time.time(),
+        offset=0.03,
+    )
+
+    assert shifted
+    assert output.up == 1
+    assert tcu._tcu_state == "UPSHIFT"
+
+
+def test_race_fuel_cut_escape_still_bypasses_traction_hold(tmp_path):
+    tcu, output = make_tcu(tmp_path, "RACE")
+    car_key = (4197, 7, 999)
+    tcu._current_car_key = car_key
+    tcu._calibrator._ratios[car_key] = {1: 3.50, 2: 2.68}
+    tcu._calibrator._counts[car_key] = {1: 8, 2: 8}
+    tcu._calibrator._wheel_radius[car_key] = 0.34
+    tcu._calibrator._wheel_radius_counts[car_key] = 8
+
+    tcu._mode_race(
+        telemetry(
+            car_ordinal=4197,
+            car_class=7,
+            pi=999,
+            engine_max_rpm=8000.0,
+            current_rpm=6900.0,
+            gear=1,
+            speed_ms=42.0 / 3.6,
+            accel_raw=255,
+            power_w=-120000.0,
+            slip_fl=41.0,
+            slip_fr=40.0,
+            slip_rl=37.0,
+            slip_rr=36.0,
+        ),
+        time.time(),
+    )
+
+    assert output.up == 1
+    assert tcu._tcu_state == "FUEL CUT"
+
+
 def test_power_ceiling_cannot_raise_learned_limiter_ceiling(tmp_path):
     tcu, _output = make_tcu(tmp_path, "RACE")
     car_key = (1, 5, 900)
