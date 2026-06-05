@@ -20,6 +20,7 @@ from virtual_tcu.learning.gear_ratio import GearRatioCalibrator
 from virtual_tcu.learning.power_curve import PowerCurveDetector
 from virtual_tcu.learning.rev_limiter import RevLimiterDetector
 from virtual_tcu.learning.shift_lag import ShiftLagLearner
+from virtual_tcu.learning.shift_outcome import ShiftOutcomeLearner, ShiftOutcomeUpdate
 from virtual_tcu.state.graph_buffer import GraphBuffer
 from virtual_tcu.state.session_stats import SessionStats
 from virtual_tcu.state.shift_history import ShiftHistory
@@ -103,6 +104,7 @@ class TCULogic:
         self._drive_style = DriveStyleTracker()
         self._rev_limiter = RevLimiterDetector()
         self._shift_lag = ShiftLagLearner()
+        self._shift_outcome = ShiftOutcomeLearner()
         self._shift_history = ShiftHistory()
         self._session_stats = SessionStats()
         self._graph_buffer = GraphBuffer()
@@ -151,6 +153,9 @@ class TCULogic:
         sl = self._shift_lag.dump(ck)
         if sl is not None:
             profile["shift_lag"] = sl
+        so = self._shift_outcome.dump(ck)
+        if so is not None:
+            profile["shift_outcome"] = so
         if profile:
             from datetime import datetime
 
@@ -172,6 +177,7 @@ class TCULogic:
             self._rev_limiter.dump(ck),
             ratio_signature,
             self._shift_lag.dump(ck),
+            self._shift_outcome.dump(ck),
             progress.get("samples", 0),
             progress.get("points", 0),
             progress.get("min_rpm"),
@@ -216,6 +222,8 @@ class TCULogic:
             self._rev_limiter.load(ck, data["rev_limiter"])
         if "shift_lag" in data:
             self._shift_lag.load(ck, data["shift_lag"])
+        if "shift_outcome" in data:
+            self._shift_outcome.load(ck, data["shift_outcome"])
 
     def shutdown(self):
         self.save_profiles()
@@ -443,6 +451,9 @@ class TCULogic:
             "peak_hp_rpm": None,
             "peak_torque_nm": None,
             "peak_torque_rpm": None,
+            "shift_outcome_total_samples": 0,
+            "shift_outcome_ready_gears": 0,
+            "shift_outcome_gears": [],
             "curve": [],
             "gears": [],
         }
@@ -529,10 +540,31 @@ class TCULogic:
         max_rpm = td.engine_max_rpm if td.engine_max_rpm > 0 else progress.get("max_rpm")
 
         gears = []
+        outcome_gears = []
         for gear in sorted(ratios):
             if gear < 1 or gear > 10:
                 continue
             target = gear_targets.get(gear)
+            next_gear = gear + 1 if gear + 1 in ratios else None
+            outcome = (
+                self._shift_outcome.status(td.car_key, gear)
+                if next_gear is not None
+                else {
+                    "samples": 0,
+                    "offset_rpm": 0.0,
+                    "active_offset_rpm": 0.0,
+                    "ready": False,
+                    "recent_reward_kmh_s": None,
+                }
+            )
+            if next_gear is not None:
+                outcome_gears.append(
+                    {
+                        "gear": gear,
+                        "to_gear": next_gear,
+                        **outcome,
+                    }
+                )
             min_speed = gear_targets.get(gear - 1, {}).get("speed_kmh") if gear > 1 else 0.0
             max_speed = target.get("speed_kmh") if target else None
             if max_speed is None and max_rpm:
@@ -559,14 +591,21 @@ class TCULogic:
                     "upshift_rpm": target.get("rpm") if target else None,
                     "upshift_rpm_pct": target.get("rpm_pct") if target else None,
                     "upshift_speed_kmh": target.get("speed_kmh") if target else None,
-                    "next_gear": gear + 1 if gear + 1 in ratios else None,
+                    "next_gear": next_gear,
                     "landing_rpm": target.get("landing_rpm") if target else None,
                     "power_hp": target.get("power_hp") if target else None,
                     "landing_power_hp": target.get("landing_power_hp") if target else None,
                     "source": target.get("source") if target else "top or learning",
+                    "shift_outcome_samples": outcome["samples"],
+                    "shift_outcome_offset_rpm": outcome["offset_rpm"],
+                    "shift_outcome_active_offset_rpm": outcome["active_offset_rpm"],
+                    "shift_outcome_ready": outcome["ready"],
+                    "shift_outcome_recent_reward_kmh_s": outcome["recent_reward_kmh_s"],
                 }
             )
 
+        outcome_total_samples = sum(int(row["samples"]) for row in outcome_gears)
+        outcome_ready_gears = sum(1 for row in outcome_gears if row["ready"])
         guide.update(
             {
                 "available": bool(curve or ratios),
@@ -583,6 +622,9 @@ class TCULogic:
                 "peak_hp_rpm": peak_hp_point["rpm"] if peak_hp_point else None,
                 "peak_torque_nm": peak_torque_point["torque_nm"] if peak_torque_point else None,
                 "peak_torque_rpm": peak_torque_point["rpm"] if peak_torque_point else None,
+                "shift_outcome_total_samples": outcome_total_samples,
+                "shift_outcome_ready_gears": outcome_ready_gears,
+                "shift_outcome_gears": outcome_gears,
                 "curve": curve,
                 "gears": gears,
             }
@@ -605,6 +647,7 @@ class TCULogic:
             self._power_curve.reset_car(car_key)
             self._rev_limiter.reset_car(car_key)
             self._shift_lag.reset_car(car_key)
+            self._shift_outcome.reset_car(car_key)
             profile_deleted = self._profiles.delete(car_key)
 
             if self._current_car_key == car_key:
@@ -651,6 +694,7 @@ class TCULogic:
             self._last_rpm_sample = None
             self._pending_upshift_gear = None
             self._pending_upshift_until = 0.0
+            self._shift_outcome.cancel_pending()
             self._tcu_state = "RESUMING"
             self._tcu_state_sub = "from menu/pause"
 
@@ -677,6 +721,15 @@ class TCULogic:
 
             if self._pending_upshift_gear is not None and td.gear >= self._pending_upshift_gear:
                 pending_gear = self._pending_upshift_gear
+                from_gear = max(1, pending_gear - 1)
+                self._shift_outcome.confirm_upshift(
+                    td.car_key,
+                    td.gear,
+                    now,
+                    landing_rpm=td.current_rpm,
+                    landing_speed_kmh=td.speed_kmh,
+                    landing_power_ratio=self._shift_outcome_landing_power_ratio(td, from_gear),
+                )
                 self._pending_upshift_gear = None
                 self._pending_upshift_until = 0.0
                 hold_s = self._post_upshift_confirm_hold_s(td)
@@ -702,9 +755,11 @@ class TCULogic:
                         else 0.5
                     )
                     self._no_upshift_until = max(self._no_upshift_until, now + hold_s)
+                self._shift_outcome.cancel_pending()
         if self._pending_upshift_gear is not None and now > self._pending_upshift_until:
             self._pending_upshift_gear = None
             self._pending_upshift_until = 0.0
+            self._shift_outcome.cancel_pending()
         self._prev_gear = td.gear
         self._we_shifted = False
 
@@ -748,6 +803,7 @@ class TCULogic:
             self._power_curve.reset_car(ck)
             self._rev_limiter.reset_car(ck)
             self._shift_lag.reset_car(ck)
+            self._shift_outcome.reset_car(ck)
             # Restore previously-saved learning data for this car+tune.
             self._load_profiles(ck)
             self._last_profile_signature = self._profile_signature(ck)
@@ -783,6 +839,15 @@ class TCULogic:
                 self._lock_until = min(self._lock_until, now + 0.10)
                 if not self._low_gear_limiter_guard_ready(td, now)[0]:
                     self._no_upshift_until = max(self._no_upshift_until, now + 0.80)
+        outcome_update = self._shift_outcome.observe(
+            td,
+            now,
+            clean=self._race_shift_outcome_sample_clean(td),
+        )
+        if outcome_update is not None:
+            if outcome_update.changed:
+                self._record_shift_outcome_update("shift_outcome_adjust", td, outcome_update)
+            self._save_profiles_if_changed(now, force=outcome_update.changed)
         if self._config.get("feat_transient_lock"):
             self._yaw_transient.update(td, now)
         if self._config.get("feat_drive_style"):
@@ -821,6 +886,7 @@ class TCULogic:
             self._last_processed_mode = current_mode
             self._launch_armed = False
             self._no_upshift_until = 0.0
+            self._shift_outcome.cancel_pending()
 
         if self.mode == Mode.MANUAL:
             self._tcu_state = "MANUAL"
@@ -965,6 +1031,7 @@ class TCULogic:
             now,
             command_rpm=td.current_rpm,
         )
+        self._record_shift_outcome_command(td, now, decision_extra)
 
         self._kb.shift_up()
         self._logger.mark_event()
@@ -1476,6 +1543,18 @@ class TCULogic:
         )
         command_rpm = command_pct * max_rpm
         base_rpm = base_pct * max_rpm
+        if self.mode == Mode.RACE and self._race_shift_outcome_sample_clean(td):
+            outcome_offset = self._shift_outcome.base_offset_rpm(td.car_key, td.gear)
+            outcome_active = self._shift_outcome.active_offset_rpm(
+                td.car_key,
+                td.gear,
+                allow_probe=False,
+            )
+            outcome_samples = self._shift_outcome.sample_count(td.car_key, td.gear)
+        else:
+            outcome_offset = 0.0
+            outcome_active = 0.0
+            outcome_samples = 0
         return {
             "upshift_target_rpm": round(command_rpm, 1),
             "upshift_target_pct": round(command_pct, 4),
@@ -1503,7 +1582,127 @@ class TCULogic:
             "power_samples": progress.get("samples", 0),
             "power_points": progress.get("points", 0),
             "power_confidence": round(self._power_curve.confidence(td.car_key), 3),
+            "shift_outcome_offset_rpm": round(outcome_offset, 1),
+            "shift_outcome_active_offset_rpm": round(outcome_active, 1),
+            "shift_outcome_samples": outcome_samples,
         }
+
+    def _race_shift_outcome_sample_clean(self, td: Telemetry) -> bool:
+        if self.mode != Mode.RACE:
+            return False
+        if td.car_key[0] <= 0 or td.gear < 1 or td.engine_max_rpm <= 0:
+            return False
+        if td.throttle < 0.90 or td.brake > 0.03:
+            return False
+        if self._config.get("feat_airtime_lock") and self._airtime.is_airborne:
+            return False
+        if td.max_combined_slip > 0.75:
+            return False
+        if abs(td.ang_vel_z) > 0.12 or abs(self._g_lat) > 0.35:
+            return False
+        if td.power_w < -5000.0:
+            return False
+        return td.speed_kmh > Cfg.MIN_SPEED_KMH
+
+    def _race_shift_outcome_offset_rpm(self, td: Telemetry) -> float:
+        if not self._race_shift_outcome_sample_clean(td):
+            return 0.0
+        if td.gear < 1 or td.gear >= 10:
+            return 0.0
+        return self._shift_outcome.active_offset_rpm(
+            td.car_key,
+            td.gear,
+            allow_probe=td.throttle >= 0.95,
+        )
+
+    def _apply_shift_outcome_offset_pct(self, td: Telemetry, target_pct: float) -> float:
+        if (
+            self.mode != Mode.RACE
+            or td.engine_max_rpm <= 0
+            or not self._race_shift_outcome_sample_clean(td)
+        ):
+            return target_pct
+        offset_rpm = self._shift_outcome.active_offset_rpm(
+            td.car_key,
+            td.gear,
+            allow_probe=False,
+        )
+        if abs(offset_rpm) < 0.01:
+            return target_pct
+        target = target_pct + offset_rpm / td.engine_max_rpm
+        return max(0.50, min(target, self._upshift_ceiling_pct(td)))
+
+    def _record_shift_outcome_command(
+        self,
+        td: Telemetry,
+        now: float,
+        decision_extra: dict | None,
+    ):
+        if not self._race_shift_outcome_sample_clean(td) or not decision_extra:
+            self._shift_outcome.cancel_pending()
+            return
+
+        source = str(decision_extra.get("upshift_target_source", ""))
+        if not source:
+            self._shift_outcome.cancel_pending()
+            return
+        target_rpm = decision_extra.get("upshift_target_rpm")
+        nominal_rpm = decision_extra.get("upshift_base_target_rpm", target_rpm)
+        active_offset = decision_extra.get("shift_outcome_active_offset_rpm")
+        if not isinstance(target_rpm, (int, float)):
+            self._shift_outcome.cancel_pending()
+            return
+        if not isinstance(nominal_rpm, (int, float)):
+            nominal_rpm = target_rpm
+        if not isinstance(active_offset, (int, float)):
+            active_offset = 0.0
+
+        self._shift_outcome.record_command(
+            td.car_key,
+            td.gear,
+            now,
+            command_rpm=td.current_rpm,
+            command_speed_kmh=td.speed_kmh,
+            target_rpm=float(target_rpm),
+            nominal_target_rpm=float(nominal_rpm) - float(active_offset),
+            applied_offset_rpm=float(active_offset),
+            source=source,
+        )
+
+    def _shift_outcome_landing_power_ratio(
+        self,
+        td: Telemetry,
+        from_gear: int,
+    ) -> float | None:
+        from_rpm = self._calibrator.project_rpm_at_speed(td.car_key, from_gear, td.speed_kmh)
+        if from_rpm is None:
+            current_ratio = self._calibrator.ratio_for_gear(td.car_key, from_gear)
+            next_ratio = self._calibrator.ratio_for_gear(td.car_key, td.gear)
+            if current_ratio and next_ratio:
+                from_rpm = td.current_rpm * current_ratio / next_ratio
+        if from_rpm is None:
+            return None
+        current_power = self._power_curve.power_at_rpm(td.car_key, from_rpm)
+        landing_power = self._power_curve.power_at_rpm(td.car_key, td.current_rpm)
+        if current_power is None or landing_power is None or current_power <= 1.0:
+            return None
+        return max(0.0, min(1.5, landing_power / current_power))
+
+    def _record_shift_outcome_update(
+        self,
+        event: str,
+        td: Telemetry,
+        update: ShiftOutcomeUpdate,
+    ):
+        extra = {
+            "from_gear": max(1, td.gear - 1),
+            "shift_outcome_offset_rpm": round(update.offset_rpm, 1),
+            "shift_outcome_reason": update.reason,
+            "shift_outcome_samples": update.sample_count,
+        }
+        if update.reward_delta is not None:
+            extra["shift_outcome_reward_delta"] = round(update.reward_delta, 3)
+        self._record_decision(event, td, **extra)
 
     def _should_brake_downshift(self, td: Telemetry, base_thr: float) -> bool:
         if td.brake < base_thr:
@@ -2012,6 +2211,9 @@ class TCULogic:
         if td.speed_kmh <= Cfg.MIN_SPEED_KMH:
             return False
 
+        if self.mode == Mode.RACE:
+            self._race_shift_outcome_offset_rpm(td)
+
         performance_target = self._performance_upshift_target_pct(td, offset)
         if performance_target is not None:
             strategy_pct, strategy_source = performance_target
@@ -2022,6 +2224,8 @@ class TCULogic:
                 strategy_source,
                 ceiling_pct,
             )
+            if self.mode == Mode.RACE:
+                base_pct = self._apply_shift_outcome_offset_pct(td, base_pct)
             target_pct, source = self._upshift_command_target_pct(td, base_pct, strategy_source)
             if td.rpm_pct < target_pct:
                 return False
@@ -2048,6 +2252,7 @@ class TCULogic:
 
         if self.mode == Mode.RACE:
             target_pct, source = self._race_upshift_target_pct(td)
+            target_pct = self._apply_shift_outcome_offset_pct(td, target_pct)
             if td.rpm_pct < target_pct:
                 return False
             return self._shift_up(
@@ -2409,6 +2614,19 @@ class TCULogic:
         points = int(progress.get("points", 0))
         return f"{confidence}% / {samples} samples / {points} bins"
 
+    def _race_loop_progress_label(self, car_key: tuple) -> str:
+        ratios = self._calibrator.get_ratios(car_key)
+        total_samples = 0
+        ready_gears = 0
+        for gear in sorted(ratios):
+            if gear < 1 or gear + 1 not in ratios:
+                continue
+            status = self._shift_outcome.status(car_key, gear)
+            total_samples += int(status["samples"])
+            if status["ready"]:
+                ready_gears += 1
+        return f"{total_samples} Race loop samples / {ready_gears} ready gears"
+
     def _gear_learning_hint(self, td: Telemetry) -> str:
         if td.gear < 1:
             return "select 2nd or 3rd gear"
@@ -2437,15 +2655,21 @@ class TCULogic:
         lookup_ready = self._power_curve.has_power_lookup(td.car_key)
 
         if ratios_ready and curve_ready and lookup_ready:
+            loop_label = self._race_loop_progress_label(td.car_key)
             self._tcu_state = "LEARN DONE"
-            self._tcu_state_sub = f"curve ready ({progress_label}); switch to Race"
-            self._shift_hint = "Learning complete - switch to Race"
+            self._tcu_state_sub = (
+                f"base model ready ({progress_label}); {loop_label}; switch to Race"
+            )
+            self._shift_hint = (
+                "Base learning complete - use Race mode WOT 1-2, 2-3, 3-4 pulls "
+                "to tune shift RPM"
+            )
             return
 
         if not ratios_ready:
             self._tcu_state = "LEARN GEARS"
-            self._tcu_state_sub = self._gear_learning_hint(td)
-            self._shift_hint = "First: drive straight in 2nd, 3rd, 4th briefly"
+            self._tcu_state_sub = f"base step 1/2: {self._gear_learning_hint(td)}"
+            self._shift_hint = "Learn base model first: steady 2nd-4th gear pulls on dry pavement"
             return
 
         clean, reason = self._power_curve.sample_status(td)
@@ -2455,8 +2679,10 @@ class TCULogic:
                 "raise RPM above idle",
             }
             self._tcu_state = "LEARN READY" if ready else "LEARN PAUSED"
-            self._tcu_state_sub = f"{reason}; {progress_label}"
-            self._shift_hint = "Straight dry road: 2nd/3rd gear, full throttle to near redline"
+            self._tcu_state_sub = f"base step 2/2: {reason}; {progress_label}"
+            self._shift_hint = (
+                "Build power curve: straight dry road, 2nd/3rd gear, WOT to near redline"
+            )
             return
 
         max_seen = progress.get("max_rpm")
@@ -2467,11 +2693,11 @@ class TCULogic:
 
         self._tcu_state = "LEARNING"
         if top_seen < 0.82:
-            self._tcu_state_sub = f"clean sample; keep WOT higher ({progress_label})"
+            self._tcu_state_sub = f"base step 2/2 clean; keep WOT higher ({progress_label})"
         else:
-            self._tcu_state_sub = f"clean pull; repeat once if needed ({progress_label})"
+            self._tcu_state_sub = f"base step 2/2 clean pull; repeat if needed ({progress_label})"
         self._shift_hint = (
-            "Hold full throttle; manually shift before limiter, then repeat next gear"
+            "Hold WOT and shift before limiter; Race mode will learn final shift RPM"
         )
 
     def _launch_control(self, td: Telemetry, now: float) -> bool:

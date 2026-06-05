@@ -8,6 +8,7 @@ from virtual_tcu.detectors.airtime import AirtimeDetector
 from virtual_tcu.input.interface import OutputInterface
 from virtual_tcu.learning.rev_limiter import RevLimiterDetector
 from virtual_tcu.learning.shift_lag import ShiftLagLearner
+from virtual_tcu.learning.shift_outcome import ShiftOutcomeLearner
 from virtual_tcu.logic.tcu import TCULogic
 from virtual_tcu.storage.profiles import ProfileStore
 from virtual_tcu.telemetry.logger import TelemetryLogger
@@ -159,6 +160,7 @@ def test_clear_current_car_learning_resets_profile_and_memory(tmp_path):
     assert tcu._power_curve.dump(car_key) is None
     assert tcu._rev_limiter.dump(car_key) is None
     assert tcu._shift_lag.dump(car_key) is None
+    assert tcu._shift_outcome.dump(car_key) is None
 
 
 def test_upshift_decision_logs_target_context(tmp_path):
@@ -683,7 +685,7 @@ def test_learn_mode_guides_without_auto_shifting(tmp_path):
     assert output.up == 0
     assert output.down == 0
     assert tcu._tcu_state == "LEARNING"
-    assert "Hold full throttle" in tcu._shift_hint
+    assert "Race mode will learn final shift RPM" in tcu._shift_hint
 
 
 def test_learn_mode_rejects_spin_without_changing_tune(tmp_path):
@@ -732,7 +734,9 @@ def test_learn_mode_announces_done_when_curve_and_ratios_are_ready(tmp_path):
     assert output.up == 0
     assert output.down == 0
     assert tcu._tcu_state == "LEARN DONE"
-    assert "switch to Race" in tcu._tcu_state_sub
+    assert "base model ready" in tcu._tcu_state_sub
+    assert "Race loop samples" in tcu._tcu_state_sub
+    assert "Race mode WOT 1-2, 2-3, 3-4" in tcu._shift_hint
 
 
 def test_rev_limiter_ignores_positive_power_drag_plateau():
@@ -1073,3 +1077,97 @@ def test_drift_keeps_single_downshift(tmp_path):
     assert output.down == 1
     assert output.double_down == 0
     assert tcu._tcu_state == "DRIFT HOLD"
+
+
+def test_shift_outcome_learner_moves_toward_better_side():
+    learner = ShiftOutcomeLearner()
+    car_key = (1, 5, 900)
+
+    for reward in (12.0, 12.2, 12.1):
+        learner.record_sample(car_key, 1, applied_offset_rpm=-40.0, reward_kmh_s=reward)
+    for reward in (13.1, 13.4, 13.3):
+        update = learner.record_sample(
+            car_key,
+            1,
+            applied_offset_rpm=40.0,
+            reward_kmh_s=reward,
+        )
+
+    assert update.changed
+    assert update.offset_rpm == 25.0
+    assert learner.base_offset_rpm(car_key, 1) == 25.0
+
+
+def test_race_shift_outcome_offset_affects_upshift_target(tmp_path):
+    tcu, output = make_tcu(tmp_path, "RACE")
+    seed_ratios(tcu)
+    car_key = (1, 5, 900)
+    tcu._current_car_key = car_key
+    tcu._shift_outcome._offsets[(car_key, 3)] = 100.0
+    tcu._performance_upshift_target_pct = lambda _td, _offset: (0.75, "power cross")
+    events = []
+    tcu._logger.record_decision = events.append
+
+    shifted = tcu._track_upshift_in_band(
+        telemetry(current_rpm=6100.0, gear=3, accel_raw=255, speed_ms=35.0),
+        time.time(),
+        offset=0.03,
+    )
+
+    assert shifted
+    assert output.up == 1
+    assert events[-1]["upshift_base_target_rpm"] == 6100.0
+    assert events[-1]["shift_outcome_offset_rpm"] == 100.0
+
+
+def test_race_shift_outcome_offset_requires_clean_sample(tmp_path):
+    tcu, output = make_tcu(tmp_path, "RACE")
+    seed_ratios(tcu)
+    car_key = (1, 5, 900)
+    tcu._current_car_key = car_key
+    tcu._shift_outcome._offsets[(car_key, 3)] = 100.0
+    tcu._performance_upshift_target_pct = lambda _td, _offset: (0.75, "power cross")
+
+    shifted = tcu._track_upshift_in_band(
+        telemetry(
+            current_rpm=6020.0,
+            gear=3,
+            accel_raw=255,
+            speed_ms=35.0,
+            slip_fl=0.9,
+        ),
+        time.time(),
+        offset=0.03,
+    )
+
+    assert shifted
+    assert output.up == 1
+    assert tcu._shift_outcome._pending_command is None
+
+
+def test_shift_outcome_persists_and_restores(tmp_path):
+    profiles = ProfileStore(tmp_path / "profiles.json")
+    config = ConfigStore(tmp_path / "config.json")
+    config.set("current_mode", "RACE")
+    car_key = (1, 5, 900)
+
+    tcu = TCULogic(CountingOutput(), profiles, config, TelemetryLogger())
+    tcu._current_car_key = car_key
+    tcu._shift_outcome._offsets[(car_key, 2)] = -50.0
+    tcu._shift_outcome.record_sample(car_key, 2, applied_offset_rpm=-40.0, reward_kmh_s=12.0)
+    tcu.save_profiles()
+
+    restored = TCULogic(CountingOutput(), profiles, config, TelemetryLogger())
+    restored._load_profiles(car_key)
+
+    assert restored._shift_outcome.base_offset_rpm(car_key, 2) == -50.0
+    assert restored._shift_outcome.sample_count(car_key, 2) == 1
+
+
+def test_shift_outcome_rejects_offroad_samples(tmp_path):
+    tcu, _output = make_tcu(tmp_path, "OFFROAD")
+    seed_ratios(tcu)
+
+    assert not tcu._race_shift_outcome_sample_clean(
+        telemetry(current_rpm=7200.0, gear=3, accel_raw=255, speed_ms=35.0)
+    )

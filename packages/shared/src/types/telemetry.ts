@@ -55,6 +55,21 @@ export interface ShiftGuideGearRow {
   power_hp: number | null
   landing_power_hp: number | null
   source: string
+  shift_outcome_samples?: number
+  shift_outcome_offset_rpm?: number
+  shift_outcome_active_offset_rpm?: number
+  shift_outcome_ready?: boolean
+  shift_outcome_recent_reward_kmh_s?: number | null
+}
+
+export interface ShiftOutcomeGearStatus {
+  gear: number
+  to_gear: number
+  samples: number
+  offset_rpm: number
+  active_offset_rpm: number
+  ready: boolean
+  recent_reward_kmh_s: number | null
 }
 
 export interface ShiftGuide {
@@ -70,6 +85,9 @@ export interface ShiftGuide {
   peak_hp_rpm: number | null
   peak_torque_nm: number | null
   peak_torque_rpm: number | null
+  shift_outcome_total_samples: number
+  shift_outcome_ready_gears: number
+  shift_outcome_gears: ShiftOutcomeGearStatus[]
   curve: ShiftGuideCurvePoint[]
   gears: ShiftGuideGearRow[]
 }
