@@ -1038,6 +1038,32 @@ def test_offroad_uses_torque_power_down(tmp_path):
     assert tcu._tcu_state == "TORQUE DOWN"
 
 
+def test_offroad_does_not_wheelspin_upshift(tmp_path):
+    tcu, output = make_tcu(tmp_path, "OFFROAD")
+    seed_ratios(tcu)
+
+    tcu.process(
+        telemetry(
+            current_rpm=1331.7,
+            gear=1,
+            speed_ms=20.6 / 3.6,
+            accel_raw=255,
+            power_w=123300.0,
+            slip_fl=2.80,
+            slip_fr=2.75,
+            slip_rl=1.90,
+            slip_rr=1.85,
+            suspension_norm_fl=0.20,
+            suspension_norm_fr=0.22,
+            suspension_norm_rl=0.64,
+            suspension_norm_rr=0.61,
+        )
+    )
+
+    assert output.up == 0
+    assert tcu._tcu_state != "WHEELSPIN"
+
+
 def test_drift_keeps_single_downshift(tmp_path):
     tcu, output = make_tcu(tmp_path, "DRIFT")
     seed_ratios(tcu)

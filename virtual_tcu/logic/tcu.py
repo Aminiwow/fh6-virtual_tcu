@@ -85,7 +85,6 @@ class TCULogic:
         self._last_packet_time = 0.0
         self._prev_gear = -1
         self._we_shifted = False
-        self._slip_streak = 0
         self._last_rpm_sample: tuple[float, float] | None = None
         self._pending_upshift_gear: int | None = None
         self._pending_upshift_until = 0.0
@@ -642,7 +641,6 @@ class TCULogic:
             self._no_predictive_until = 0.0
             self._reverse_lock_until = 0.0
             self._launch_armed = False
-            self._slip_streak = 0
             self._last_hard_brake_time = 0.0
             self._brake_history.clear()
             self._throttle_history.clear()
@@ -906,7 +904,6 @@ class TCULogic:
         self._no_predictive_until = 0.0
         self._reverse_lock_until = 0.0
         self._launch_armed = False
-        self._slip_streak = 0
         self._last_hard_brake_time = 0.0
         self._brake_history.clear()
         self._throttle_history.clear()
@@ -1537,37 +1534,6 @@ class TCULogic:
             if min(recent) > base_thr:
                 return True
         return False
-
-    def _wheelspin_upshift_now(self, td: Telemetry) -> bool:
-        if not self._config.get("feat_drivetrain_aware"):
-            return False
-        if self.mode == Mode.RACE:
-            self._slip_streak = 0
-            return False
-        if time.time() < self._no_upshift_until:
-            self._slip_streak = 0
-            return False
-        if td.gear < 1 or td.gear > 3:
-            self._slip_streak = 0
-            return False
-        if td.throttle < 0.40:
-            self._slip_streak = 0
-            return False
-
-        if td.drivetrain == 0:  # FWD
-            slip = max(abs(td.slip_fl), abs(td.slip_fr))
-        elif td.drivetrain == 1:  # RWD
-            slip = max(abs(td.slip_rl), abs(td.slip_rr))
-        else:  # AWD or unknown
-            slip = max(abs(td.slip_fl), abs(td.slip_fr), abs(td.slip_rl), abs(td.slip_rr))
-
-        threshold = 1.2
-        if slip > threshold:
-            self._slip_streak += 1
-            return self._slip_streak >= 3
-        else:
-            self._slip_streak = 0
-            return False
 
     def _track_brake_down(
         self,
@@ -2657,10 +2623,6 @@ class TCULogic:
         ):
             return
 
-        if self._wheelspin_upshift_now(td) and td.speed_kmh > 15.0:
-            self._shift_up(td, 400, "WHEELSPIN", "traction save", downshift_lock_s=0.55)
-            return
-
         if self._track_out_of_band_kickdown(
             td,
             now,
@@ -2766,14 +2728,6 @@ class TCULogic:
             engine_brake_max_current_pct=0.62,
             engine_brake_max_projected_pct=0.84,
         ):
-            return
-
-        if (
-            self._wheelspin_upshift_now(td)
-            and td.speed_kmh > 15.0
-            and not self._is_spinning_not_traction(td)
-        ):
-            self._shift_up(td, 400, "WHEELSPIN", "lose grip", downshift_lock_s=0.80)
             return
 
         down_rpm = self._config.get("offroad_down_rpm", 55) / 100
