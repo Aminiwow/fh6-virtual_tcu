@@ -1,7 +1,7 @@
 {
   "name": "@virtual-tcu/ui",
   "type": "module",
-  "version": "13.4.24",
+  "version": "13.4.25",
   "private": true,
   "exports": {
     "./theme": "./src/theme.ts",

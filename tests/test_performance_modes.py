@@ -1361,7 +1361,7 @@ def test_shift_outcome_waits_through_dirty_settle_before_sampling():
     assert learner.sample_count(car_key, 1) == 1
 
 
-def test_shift_outcome_moves_later_when_next_gear_lands_below_power_band():
+def test_shift_outcome_needs_reward_comparison_before_adjusting():
     learner = ShiftOutcomeLearner()
     car_key = (1, 5, 900)
 
@@ -1380,10 +1380,8 @@ def test_shift_outcome_moves_later_when_next_gear_lands_below_power_band():
         landing_power_ratio=0.74,
     )
 
-    assert update.changed
-    assert update.reason == "next gear lands below power band"
-    assert update.offset_rpm == 50.0
-    assert learner.base_offset_rpm(car_key, 1) == 50.0
+    assert not update.changed
+    assert learner.base_offset_rpm(car_key, 1) == 0.0
 
 
 def test_tcu_records_shift_outcome_after_post_shift_settle(tmp_path):
@@ -1500,6 +1498,53 @@ def test_shift_outcome_persists_and_restores(tmp_path):
 
     assert restored._shift_outcome.base_offset_rpm(car_key, 2) == -50.0
     assert restored._shift_outcome.sample_count(car_key, 2) == 1
+
+
+def test_old_profile_keeps_base_learning_but_drops_polluted_dynamic_learning(tmp_path):
+    profiles = ProfileStore(tmp_path / "profiles.json")
+    config = ConfigStore(tmp_path / "config.json")
+    config.set("current_mode", "RACE")
+    car_key = (1, 5, 900)
+    profiles.set(
+        car_key,
+        {
+            "telemetry_schema": "fh6-dataout-2026-05-15-v8-smart-margin",
+            "gear_ratios": {"1": 5.7, "2": 3.8},
+            "gear_counts": {"1": 8, "2": 8},
+            "gear_ratio_basis": "engine_rad_per_driven_wheel_rad",
+            "wheel_radius": 0.34,
+            "wheel_radius_count": 8,
+            "power_curve": {
+                "format": "power_bins_v2",
+                "max_rpm": 8000.0,
+                "best_power_hp": 1700.0,
+                "bin_rpm": 50,
+                "bins": {},
+            },
+            "rev_limiter": 7249.0,
+            "shift_lag": {"upshift_lags": [0.09, 0.10, 0.11]},
+            "shift_outcome": {
+                "offsets_by_gear": {"3": -200.0},
+                "samples_by_gear": {
+                    "3": [
+                        {
+                            "applied_offset_rpm": -200.0,
+                            "reward_kmh_s": 20.0,
+                        }
+                    ]
+                },
+            },
+        },
+    )
+
+    restored = TCULogic(CountingOutput(), profiles, config, TelemetryLogger())
+    restored._load_profiles(car_key)
+
+    assert restored._calibrator.ratio_for_gear(car_key, 1) == 5.7
+    assert restored._power_curve.dump(car_key) is not None
+    assert restored._rev_limiter.dump(car_key) is None
+    assert restored._shift_lag.dump(car_key) is None
+    assert restored._shift_outcome.dump(car_key) is None
 
 
 def test_shift_outcome_rejects_offroad_samples(tmp_path):

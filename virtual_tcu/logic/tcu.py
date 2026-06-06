@@ -31,9 +31,10 @@ from virtual_tcu.telemetry.model import Telemetry
 
 
 class TCULogic:
-    PROFILE_SCHEMA = "fh6-dataout-2026-05-15-v8-smart-margin"
+    PROFILE_SCHEMA = "fh6-dataout-2026-05-15-v9-clean-limiter-outcome"
     COMPAT_PROFILE_SCHEMAS = {
         PROFILE_SCHEMA,
+        "fh6-dataout-2026-05-15-v8-smart-margin",
         "fh6-dataout-2026-05-15-v7-smart-limiter",
     }
 
@@ -206,8 +207,10 @@ class TCULogic:
         data = self._profiles.get(ck)
         if data is None:
             return
-        if data.get("telemetry_schema") not in self.COMPAT_PROFILE_SCHEMAS:
+        schema = data.get("telemetry_schema")
+        if schema not in self.COMPAT_PROFILE_SCHEMAS:
             return
+        trusted_dynamic_learning = schema == self.PROFILE_SCHEMA
         if "gear_ratios" in data:
             self._calibrator.load(
                 ck,
@@ -221,11 +224,11 @@ class TCULogic:
             )
         if "power_curve" in data:
             self._power_curve.load(ck, data["power_curve"])
-        if "rev_limiter" in data:
+        if trusted_dynamic_learning and "rev_limiter" in data:
             self._rev_limiter.load(ck, data["rev_limiter"])
-        if "shift_lag" in data:
+        if trusted_dynamic_learning and "shift_lag" in data:
             self._shift_lag.load(ck, data["shift_lag"])
-        if "shift_outcome" in data:
+        if trusted_dynamic_learning and "shift_outcome" in data:
             self._shift_outcome.load(ck, data["shift_outcome"])
 
     def shutdown(self):

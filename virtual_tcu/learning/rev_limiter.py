@@ -29,7 +29,7 @@ class RevLimiterDetector:
     MAX_RPM_GROWTH = 90.0
     NOMINAL_BOUNCE_PCT = 0.94
     CUT_POWER_HP = 5.0
-    LOWER_TRUSTED_SOURCES = {"hard_cut", "soft_cliff", "cut_bounce"}
+    LOWER_TRUSTED_SOURCES = {"hard_cut", "cut_bounce"}
 
     def __init__(self):
         self._redline: dict[tuple, float] = {}
@@ -73,7 +73,11 @@ class RevLimiterDetector:
 
         power_hp = self._power_hp(td)
         current_peak = self._high_power_peak.get(car, 0.0)
-        return current_peak >= 50.0 and power_hp <= current_peak * self.POWER_DROP_RATIO
+        return (
+            current_peak >= 50.0
+            and power_hp <= current_peak * self.POWER_DROP_RATIO
+            and power_hp <= max(350.0, current_peak * 0.45)
+        )
 
     def observe(self, td: Telemetry, last_downshift_time: float, now: float):
         car = td.car_key
@@ -122,7 +126,11 @@ class RevLimiterDetector:
         # usually fuel cut. FH6 often reports negative torque while the engine
         # bounces below nominal max RPM, so learn from the first clean drop.
         hard_cut = has_raw_power and raw_power_hp is not None and raw_power_hp <= self.CUT_POWER_HP
-        soft_cliff = current_peak >= 50.0 and power_hp <= current_peak * self.POWER_DROP_RATIO
+        soft_cliff = (
+            current_peak >= 50.0
+            and power_hp <= current_peak * self.POWER_DROP_RATIO
+            and power_hp <= max(350.0, current_peak * 0.45)
+        )
         if current_peak >= 50.0 and (hard_cut or soft_cliff):
             streak = self._drop_streak.get(car, 0) + 1
             self._drop_streak[car] = streak

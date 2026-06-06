@@ -53,10 +53,8 @@ class ShiftOutcomeLearner:
     MAX_SAMPLES = 24
     MAX_OFFSET_RPM = 250.0
     STEP_RPM = 25.0
-    LOW_POWER_STEP_RPM = 50.0
     PROBE_RPM = 40.0
     MIN_COMPARE_SAMPLES = 6
-    MIN_POWER_BAND_SAMPLES = 2
     MIN_SIDE_SAMPLES = 2
     MIN_OFFSET_SPAN_RPM = 60.0
     MIN_NEW_SAMPLES_AFTER_ADJUST = 2
@@ -359,24 +357,6 @@ class ShiftOutcomeLearner:
         sample_count = len(samples)
         current = self._offsets.get(key, 0.0)
         new_samples = sample_count - self._last_adjust_count.get(key, 0)
-        if new_samples >= self.MIN_NEW_SAMPLES_AFTER_ADJUST:
-            recent = samples[-min(4, len(samples)) :]
-            landing_ratios = [
-                sample["landing_power_ratio"]
-                for sample in recent
-                if "landing_power_ratio" in sample
-            ]
-            if (
-                len(landing_ratios) >= self.MIN_POWER_BAND_SAMPLES
-                and mean(landing_ratios) < 0.80
-            ):
-                return self._move_offset(
-                    key,
-                    self.LOW_POWER_STEP_RPM,
-                    "next gear lands below power band",
-                    reward_delta=None,
-                )
-
         if sample_count < self.MIN_COMPARE_SAMPLES:
             return ShiftOutcomeUpdate(False, current, "", sample_count)
         if new_samples < self.MIN_NEW_SAMPLES_AFTER_ADJUST:
