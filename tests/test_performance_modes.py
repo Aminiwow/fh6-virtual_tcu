@@ -640,6 +640,91 @@ def test_race_fuel_cut_escape_still_shifts_when_traction_is_clean(tmp_path):
     assert tcu._tcu_state == "FUEL CUT"
 
 
+def test_offroad_airborne_fuel_cut_does_not_escape_upshift(tmp_path):
+    tcu, output = make_tcu(tmp_path, "OFFROAD")
+    tcu._airtime._is_airborne = True
+
+    tcu.process(
+        telemetry(
+            car_ordinal=4197,
+            car_class=7,
+            pi=999,
+            engine_max_rpm=8000.0,
+            current_rpm=7450.0,
+            gear=5,
+            speed_ms=110.0 / 3.6,
+            accel_raw=255,
+            power_w=-500000.0,
+            accel_y=-12.0,
+            suspension_norm_fl=0.0,
+            suspension_norm_fr=0.0,
+            suspension_norm_rl=0.0,
+            suspension_norm_rr=0.0,
+        )
+    )
+
+    assert output.up == 0
+    assert tcu._tcu_state == "AIRBORNE"
+
+
+def test_offroad_ground_fuel_cut_escape_shifts_before_mode_logic(tmp_path):
+    tcu, output = make_tcu(tmp_path, "OFFROAD")
+
+    tcu.process(
+        telemetry(
+            car_ordinal=4197,
+            car_class=7,
+            pi=999,
+            engine_max_rpm=8000.0,
+            current_rpm=7450.0,
+            gear=5,
+            speed_ms=110.0 / 3.6,
+            accel_raw=255,
+            power_w=-500000.0,
+            slip_fl=0.0,
+            slip_fr=0.0,
+            slip_rl=0.0,
+            slip_rr=0.0,
+        )
+    )
+
+    assert output.up == 1
+    assert tcu._tcu_state == "FUEL CUT"
+
+
+def test_unresponsive_high_gear_upshift_blocks_repeat_commands(tmp_path):
+    tcu, output = make_tcu(tmp_path, "OFFROAD")
+    car_key = (4197, 7, 999)
+    td = telemetry(
+        car_ordinal=car_key[0],
+        car_class=car_key[1],
+        pi=car_key[2],
+        engine_max_rpm=8000.0,
+        current_rpm=7450.0,
+        gear=6,
+        speed_ms=110.0 / 3.6,
+        accel_raw=255,
+        power_w=-500000.0,
+    )
+
+    for _ in range(2):
+        tcu._pending_upshift_gear = 7
+        tcu._pending_upshift_from_gear = 6
+        tcu._pending_upshift_car_key = car_key
+        tcu._pending_upshift_until = time.time() - 0.01
+        tcu.process(td)
+
+    assert tcu._top_gear_by_car[car_key] == 6
+
+    output.up = 0
+    tcu._lock_until = 0.0
+    tcu._no_upshift_until = 0.0
+    tcu.process(td)
+
+    assert output.up == 0
+    assert tcu._tcu_state == "TOP GEAR"
+
+
 def test_power_ceiling_cannot_raise_learned_limiter_ceiling(tmp_path):
     tcu, _output = make_tcu(tmp_path, "RACE")
     car_key = (1, 5, 900)

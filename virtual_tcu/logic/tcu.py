@@ -89,7 +89,11 @@ class TCULogic:
         self._we_shifted = False
         self._last_rpm_sample: tuple[float, float] | None = None
         self._pending_upshift_gear: int | None = None
+        self._pending_upshift_from_gear: int | None = None
+        self._pending_upshift_car_key: tuple | None = None
         self._pending_upshift_until = 0.0
+        self._failed_upshift_attempts: dict[tuple, dict[int, int]] = {}
+        self._top_gear_by_car: dict[tuple, int] = {}
         self._last_saved_profile_at = 0.0
         self._last_profile_signature: tuple | None = None
         self._last_valid_telemetry: Telemetry | None = None
@@ -699,6 +703,8 @@ class TCULogic:
             self._throttle_raw_history.clear()
             self._last_rpm_sample = None
             self._pending_upshift_gear = None
+            self._pending_upshift_from_gear = None
+            self._pending_upshift_car_key = None
             self._pending_upshift_until = 0.0
             self._shift_outcome.cancel_pending()
             self._tcu_state = "RESUMING"
@@ -724,6 +730,7 @@ class TCULogic:
         if td.gear != self._prev_gear and td.gear > 0 and self._prev_gear > 0:
             # 记录档位变化用于延迟学习
             self._shift_lag.observe_gear_change(td.car_key, td.gear, now)
+            self._observe_higher_gear(td)
 
             if self._pending_upshift_gear is not None and td.gear >= self._pending_upshift_gear:
                 pending_gear = self._pending_upshift_gear
@@ -737,6 +744,8 @@ class TCULogic:
                     landing_power_ratio=self._shift_outcome_landing_power_ratio(td, from_gear),
                 )
                 self._pending_upshift_gear = None
+                self._pending_upshift_from_gear = None
+                self._pending_upshift_car_key = None
                 self._pending_upshift_until = 0.0
                 hold_s = self._post_upshift_confirm_hold_s(td)
                 self._lock_until = min(self._lock_until, now + hold_s)
@@ -763,7 +772,10 @@ class TCULogic:
                     self._no_upshift_until = max(self._no_upshift_until, now + hold_s)
                 self._shift_outcome.cancel_pending()
         if self._pending_upshift_gear is not None and now > self._pending_upshift_until:
+            self._record_unresponsive_upshift(td)
             self._pending_upshift_gear = None
+            self._pending_upshift_from_gear = None
+            self._pending_upshift_car_key = None
             self._pending_upshift_until = 0.0
             self._shift_outcome.cancel_pending()
         self._prev_gear = td.gear
@@ -800,6 +812,10 @@ class TCULogic:
             if self._current_car_key is not None:
                 self.save_profiles()
             self._current_car_key = ck
+            self._pending_upshift_gear = None
+            self._pending_upshift_from_gear = None
+            self._pending_upshift_car_key = None
+            self._pending_upshift_until = 0.0
             self._peak_rpm = 0.0
             self._peak_g = 0.0
             self._last_profile_signature = None
@@ -926,15 +942,16 @@ class TCULogic:
                 return
 
         if self._config.get("feat_airtime_lock") and self._airtime.is_airborne:
-            if self._fuel_cut_escape_upshift(td, now):
-                return
-            if self._low_gear_limiter_guard_upshift(td, now):
-                return
+            if self.mode == Mode.RACE:
+                if self._fuel_cut_escape_upshift(td, now):
+                    return
+                if self._low_gear_limiter_guard_upshift(td, now):
+                    return
             self._tcu_state = "AIRBORNE"
             self._tcu_state_sub = "holding decisions"
             return
 
-        if self.mode == Mode.RACE and self._fuel_cut_escape_upshift(td, now):
+        if self.mode in (Mode.RACE, Mode.OFFROAD) and self._fuel_cut_escape_upshift(td, now):
             return
 
         min_sensible_speed = self._min_sensible_speed_for_gear(td)
@@ -991,6 +1008,8 @@ class TCULogic:
         self._throttle_raw_history.clear()
         self._last_rpm_sample = None
         self._pending_upshift_gear = None
+        self._pending_upshift_from_gear = None
+        self._pending_upshift_car_key = None
         self._pending_upshift_until = 0.0
         self._shift_hint = ""
         self._shift_advice = ""
@@ -1009,6 +1028,10 @@ class TCULogic:
     ) -> bool:
         if td.gear >= 10:
             return False
+        if self._upshift_blocked_by_top_gear(td):
+            self._tcu_state = "TOP GEAR"
+            self._tcu_state_sub = "confirmed max gear"
+            return True
         if (
             self._config.get("feat_airtime_lock")
             and self._airtime.is_airborne
@@ -1029,6 +1052,8 @@ class TCULogic:
         self._no_upshift_until = max(self._no_upshift_until, self._lock_until)
         pending_until = now + max(lock_ms / 1000.0, 0.65)
         self._pending_upshift_gear = td.gear + 1
+        self._pending_upshift_from_gear = td.gear
+        self._pending_upshift_car_key = td.car_key
         self._pending_upshift_until = pending_until
         self._no_upshift_until = max(self._no_upshift_until, pending_until)
         self._no_downshift_until = max(self._no_downshift_until, now + downshift_lock_s)
@@ -1160,6 +1185,51 @@ class TCULogic:
         elif hold_after_escape:
             self._race_slip_hold_until = max(self._race_slip_hold_until, now + 0.70)
         return shifted
+
+    def _upshift_blocked_by_top_gear(self, td: Telemetry) -> bool:
+        top_gear = self._top_gear_by_car.get(td.car_key)
+        return top_gear is not None and td.gear >= top_gear
+
+    def _observe_higher_gear(self, td: Telemetry):
+        if td.gear > 10:
+            return
+        top_gear = self._top_gear_by_car.get(td.car_key)
+        if top_gear is not None and td.gear > top_gear:
+            self._top_gear_by_car.pop(td.car_key, None)
+
+        attempts = self._failed_upshift_attempts.get(td.car_key)
+        if attempts is None:
+            return
+        for gear in [gear for gear in attempts if gear < td.gear]:
+            attempts.pop(gear, None)
+        if not attempts:
+            self._failed_upshift_attempts.pop(td.car_key, None)
+
+    def _record_unresponsive_upshift(self, td: Telemetry):
+        target_gear = self._pending_upshift_gear
+        from_gear = self._pending_upshift_from_gear
+        car_key = self._pending_upshift_car_key
+        if target_gear is None or from_gear is None or car_key is None:
+            return
+        if td.car_key != car_key or td.gear != from_gear or td.gear >= target_gear:
+            return
+        if from_gear < 5 or td.speed_kmh <= Cfg.MIN_SPEED_KMH:
+            return
+
+        attempts = self._failed_upshift_attempts.setdefault(car_key, {})
+        attempts[from_gear] = attempts.get(from_gear, 0) + 1
+        if attempts[from_gear] < 2:
+            return
+
+        self._top_gear_by_car[car_key] = from_gear
+        self._record_decision(
+            "upshift_block",
+            td,
+            state="TOP GEAR",
+            reason=f"{from_gear}->{target_gear} unresponsive",
+            top_gear=from_gear,
+            failed_upshift_attempts=attempts[from_gear],
+        )
 
     def _shift_down(
         self,
