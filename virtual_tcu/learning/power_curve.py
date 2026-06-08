@@ -119,6 +119,13 @@ class _PowerCurveFit:
             return 0.0
         return (pts[-1][0] - pts[0][0]) / self.max_rpm
 
+    @property
+    def max_seen_rpm_pct(self) -> float:
+        pts = self.points()
+        if not pts or self.max_rpm <= 0:
+            return 0.0
+        return pts[-1][0] / self.max_rpm
+
     def to_dict(self) -> dict:
         return {
             "format": "power_bins_v2",
@@ -160,6 +167,7 @@ class PowerCurveDetector:
     FULL_CONF_SAMPLES = 110
     MIN_SPREAD = 0.10
     GOOD_SPREAD = 0.35
+    HIGH_RPM_COVERAGE = 0.78
     TRUST_MODEL_CONFIDENCE = 0.35
     MIN_THROTTLE = 0.70
     MIN_CLEAN_SUSPENSION = 0.08
@@ -181,7 +189,7 @@ class PowerCurveDetector:
         if td.car_key[0] <= 0 or td.engine_max_rpm <= 0:
             return False, "waiting for valid car telemetry"
         if td.gear < 1:
-            return False, "select 2nd or 3rd gear"
+            return False, "select a forward gear"
         if td.is_shifting:
             return False, "wait for the shift to finish"
         if td.throttle < self.MIN_THROTTLE:
@@ -214,6 +222,8 @@ class PowerCurveDetector:
                 "points": 0,
                 "confidence": 0.0,
                 "rpm_spread": 0.0,
+                "high_rpm_coverage": 0.0,
+                "high_rpm_ready": False,
                 "min_rpm": None,
                 "max_rpm": None,
             }
@@ -224,6 +234,8 @@ class PowerCurveDetector:
             "points": len(pts),
             "confidence": self.confidence(car_key),
             "rpm_spread": fit.rpm_spread,
+            "high_rpm_coverage": fit.max_seen_rpm_pct,
+            "high_rpm_ready": fit.max_seen_rpm_pct >= self.HIGH_RPM_COVERAGE,
             "min_rpm": pts[0][0] if pts else None,
             "max_rpm": pts[-1][0] if pts else None,
         }
@@ -266,12 +278,20 @@ class PowerCurveDetector:
             0.0,
             min(1.0, (fit.rpm_spread - self.MIN_SPREAD) / (self.GOOD_SPREAD - self.MIN_SPREAD)),
         )
-        confidence = n_conf * s_conf
+        coverage = fit.max_seen_rpm_pct
+        span = self.HIGH_RPM_COVERAGE - 0.40
+        high_conf = max(0.0, min(1.0, (coverage - 0.40) / span)) if span > 0 else 0.0
+        peak_power_pct = peak_power[0] / fit.max_rpm
+        if coverage < self.HIGH_RPM_COVERAGE and peak_power_pct < self.HIGH_RPM_COVERAGE:
+            return None, None, 0.0
+        confidence = n_conf * s_conf * high_conf
         return peak_torque[0] / fit.max_rpm, peak_power[0] / fit.max_rpm, confidence
 
     def _point_arrays(self, car_key: tuple) -> tuple[list[int], list[float]] | None:
         fit = self._fits.get(car_key)
         if fit is None:
+            return None
+        if fit.max_seen_rpm_pct < self.HIGH_RPM_COVERAGE:
             return None
         pts = fit.points()
         if len(pts) < 3:
@@ -341,6 +361,8 @@ class PowerCurveDetector:
     def max_high_power_rpm(self, car_key: tuple, min_peak_ratio: float = 0.80) -> float | None:
         fit = self._fits.get(car_key)
         if fit is None:
+            return None
+        if fit.max_seen_rpm_pct < self.HIGH_RPM_COVERAGE:
             return None
         pts = fit.points()
         if not pts:

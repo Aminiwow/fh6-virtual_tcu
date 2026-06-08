@@ -30,9 +30,22 @@ class RevLimiterDetector:
     NOMINAL_BOUNCE_PCT = 0.94
     CUT_POWER_HP = 5.0
     LOWER_TRUSTED_SOURCES = {"hard_cut", "cut_bounce"}
+    SOURCE_CONFIDENCE = {
+        "hard_cut": 0.42,
+        "cut_bounce": 0.35,
+        "soft_cliff": 0.22,
+        "bounce": 0.18,
+        "legacy": 0.45,
+    }
+    TRUSTED_CONFIDENCE = 0.80
+    REFUTE_MARGIN_RPM = 120.0
+    REFUTE_POWER_RATIO = 0.90
+    MIN_REFUTE_POWER_HP = 80.0
 
     def __init__(self):
         self._redline: dict[tuple, float] = {}
+        self._redline_confidence: dict[tuple, float] = {}
+        self._redline_source: dict[tuple, str] = {}
         self._rpm_window: dict[tuple, deque[float]] = {}
         self._peak_hold: dict[tuple, tuple] = {}
         self._high_power_peak: dict[tuple, float] = {}
@@ -48,6 +61,8 @@ class RevLimiterDetector:
 
     def reset_car(self, car: tuple):
         self._redline.pop(car, None)
+        self._redline_confidence.pop(car, None)
+        self._redline_source.pop(car, None)
         self._rpm_window.pop(car, None)
         self._peak_hold.pop(car, None)
         self._high_power_peak.pop(car, None)
@@ -122,6 +137,10 @@ class RevLimiterDetector:
             self._drop_streak.pop(car, None)
             return
 
+        if self._refute_redline_with_strong_power(car, td, power_hp, current_peak):
+            self._drop_streak.pop(car, None)
+            return
+
         # Once high-rpm power has been observed, a sharp full-throttle drop is
         # usually fuel cut. FH6 often reports negative torque while the engine
         # bounces below nominal max RPM, so learn from the first clean drop.
@@ -175,19 +194,76 @@ class RevLimiterDetector:
             source = "cut_bounce" if cut_like else "bounce"
             self._learn(car, held_peak, source=source)
 
+    def _refute_redline_with_strong_power(
+        self,
+        car: tuple,
+        td: Telemetry,
+        power_hp: float,
+        current_peak: float,
+    ) -> bool:
+        redline = self._redline.get(car)
+        if redline is None or power_hp <= 0:
+            return False
+        if self._redline_confidence.get(car, 0.0) >= self.TRUSTED_CONFIDENCE:
+            return False
+        if td.current_rpm < redline + self.REFUTE_MARGIN_RPM:
+            return False
+
+        peak = max(current_peak, power_hp)
+        if peak < self.MIN_REFUTE_POWER_HP:
+            return False
+        if power_hp < peak * self.REFUTE_POWER_RATIO:
+            return False
+
+        self._redline.pop(car, None)
+        self._redline_confidence.pop(car, None)
+        self._redline_source.pop(car, None)
+        self._lower_candidate.pop(car, None)
+        return True
+
+    def _learn_confidence(self, source: str) -> float:
+        return self.SOURCE_CONFIDENCE.get(source, 0.15)
+
+    def _set_redline(
+        self,
+        car: tuple,
+        redline: float,
+        *,
+        source: str,
+        confidence: float | None = None,
+    ):
+        self._redline[car] = float(redline)
+        learned_confidence = self._learn_confidence(source) if confidence is None else confidence
+        self._redline_confidence[car] = max(
+            0.0,
+            min(1.0, float(learned_confidence)),
+        )
+        self._redline_source[car] = source
+
+    def _confirm_redline(self, car: tuple, redline: float, *, source: str):
+        current = self._redline.get(car)
+        confidence = self._redline_confidence.get(car, 0.0)
+        gain = self._learn_confidence(source)
+        self._set_redline(
+            car,
+            max(current or 0.0, float(redline)),
+            source=source,
+            confidence=min(1.0, max(confidence, confidence + gain)),
+        )
+
     def _learn(self, car: tuple, redline: float, *, source: str = "unknown"):
         if redline <= 0:
             return
         current = self._redline.get(car)
         if current is None:
-            self._redline[car] = float(redline)
+            self._set_redline(car, redline, source=source)
             return
         # Keep the learned value at the high edge of limiter contact. Lower
         # RPM negative-power frames are usually the bounce after fuel cut, not
         # the real shift target.
         lower_tolerance = 220.0
         if redline >= current - lower_tolerance:
-            self._redline[car] = max(current, float(redline))
+            self._confirm_redline(car, redline, source=source)
             self._lower_candidate.pop(car, None)
             return
         if source not in self.LOWER_TRUSTED_SOURCES:
@@ -201,15 +277,39 @@ class RevLimiterDetector:
             candidate, count = redline, 1
         self._lower_candidate[car] = (candidate, count)
         if count >= 6:
-            self._redline[car] = float(candidate)
+            self._set_redline(
+                car,
+                candidate,
+                source=source,
+                confidence=min(1.0, self.TRUSTED_CONFIDENCE),
+            )
             self._lower_candidate.pop(car, None)
 
     def effective_redline(self, td: Telemetry) -> float | None:
         return self._redline.get(td.car_key)
 
-    def dump(self, car: tuple) -> float | None:
-        return self._redline.get(car)
+    def dump(self, car: tuple) -> dict | None:
+        redline = self._redline.get(car)
+        if redline is None:
+            return None
+        return {
+            "rpm": round(redline, 1),
+            "confidence": round(self._redline_confidence.get(car, 0.0), 3),
+            "source": self._redline_source.get(car, "unknown"),
+        }
 
-    def load(self, car: tuple, redline: float):
+    def load(self, car: tuple, redline):
+        if isinstance(redline, dict):
+            rpm = redline.get("rpm")
+            confidence = redline.get("confidence", self.SOURCE_CONFIDENCE["legacy"])
+            source = str(redline.get("source", "legacy"))
+            if isinstance(rpm, (int, float)) and rpm > 0:
+                self._set_redline(car, rpm, source=source, confidence=float(confidence))
+            return
         if isinstance(redline, (int, float)) and redline > 0:
-            self._redline[car] = float(redline)
+            self._set_redline(
+                car,
+                float(redline),
+                source="legacy",
+                confidence=self.SOURCE_CONFIDENCE["legacy"],
+            )

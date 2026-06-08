@@ -6,6 +6,7 @@ from virtual_tcu.config.store import ConfigStore
 from virtual_tcu.core.mode import Mode
 from virtual_tcu.detectors.airtime import AirtimeDetector
 from virtual_tcu.input.interface import OutputInterface
+from virtual_tcu.learning.power_curve import PowerCurveDetector
 from virtual_tcu.learning.rev_limiter import RevLimiterDetector
 from virtual_tcu.learning.shift_lag import ShiftLagLearner
 from virtual_tcu.learning.shift_outcome import ShiftOutcomeLearner
@@ -468,6 +469,61 @@ def test_race_first_gear_wheelspin_holds_low_speed_upshift(tmp_path):
     assert output.up == 0
     assert tcu._tcu_state == "TRACTION HOLD"
     assert events[-1]["event"] == "traction_hold"
+
+
+def test_power_curve_mid_range_samples_need_high_rpm_coverage():
+    detector = PowerCurveDetector()
+    car_key = (1, 5, 900)
+
+    for _ in range(40):
+        for rpm_pct in (0.35, 0.45, 0.55, 0.65):
+            rpm = 8000.0 * rpm_pct
+            torque = max(40.0, 520.0 - abs(rpm_pct - 0.55) * 900.0)
+            detector.observe(
+                telemetry(
+                    gear=3,
+                    current_rpm=rpm,
+                    engine_max_rpm=8000.0,
+                    accel_raw=255,
+                    torque_nm=torque,
+                    power_w=torque * rpm / 9.5488,
+                )
+            )
+
+    progress = detector.learning_progress(car_key)
+    assert progress["high_rpm_ready"] is False
+    assert detector.has_mature_data(car_key) is False
+    assert detector.max_high_power_rpm(car_key) is None
+    assert detector.optimal_upshift_rpm(
+        telemetry(gear=3, current_rpm=5200.0, engine_max_rpm=8000.0),
+        fallback=0.94,
+        offset=0.03,
+    ) == 0.94
+
+
+def test_power_curve_high_rpm_samples_enable_model():
+    detector = PowerCurveDetector()
+    car_key = (1, 5, 900)
+
+    for _ in range(40):
+        for rpm_pct in (0.45, 0.60, 0.75, 0.84, 0.92):
+            rpm = 8000.0 * rpm_pct
+            torque = 520.0 if rpm_pct < 0.78 else 500.0
+            detector.observe(
+                telemetry(
+                    gear=3,
+                    current_rpm=rpm,
+                    engine_max_rpm=8000.0,
+                    accel_raw=255,
+                    torque_nm=torque,
+                    power_w=torque * rpm / 9.5488,
+                )
+            )
+
+    progress = detector.learning_progress(car_key)
+    assert progress["high_rpm_ready"] is True
+    assert detector.has_mature_data(car_key) is True
+    assert detector.max_high_power_rpm(car_key) is not None
 
 
 def test_race_first_gear_traction_hold_continues_when_speed_catches_up_but_slips(tmp_path):
@@ -1053,6 +1109,67 @@ def test_rev_limiter_ignores_positive_power_drag_plateau():
         )
 
     assert detector.effective_redline(telemetry()) == 8000.0
+
+
+def test_rev_limiter_refutes_low_confidence_cut_when_strong_power_seen_above():
+    detector = RevLimiterDetector()
+    car_key = telemetry().car_key
+    detector.load(car_key, {"rpm": 6800.0, "confidence": 0.25, "source": "soft_cliff"})
+
+    for i in range(2):
+        detector.observe(
+            telemetry(
+                current_rpm=7250.0,
+                gear=4,
+                accel_raw=255,
+                speed_ms=48.0,
+                power_w=500.0 * 745.699872,
+                torque_nm=480.0,
+            ),
+            last_downshift_time=-999.0,
+            now=float(i) * 0.05,
+        )
+
+    assert detector.effective_redline(telemetry()) is None
+    assert detector.dump(car_key) is None
+
+
+def test_rev_limiter_confirmed_cut_survives_strong_power_refute_sample():
+    detector = RevLimiterDetector()
+    car_key = telemetry().car_key
+    detector.load(car_key, {"rpm": 6800.0, "confidence": 0.90, "source": "hard_cut"})
+
+    for i in range(3):
+        detector.observe(
+            telemetry(
+                current_rpm=7250.0,
+                gear=4,
+                accel_raw=255,
+                speed_ms=48.0,
+                power_w=500.0 * 745.699872,
+                torque_nm=480.0,
+            ),
+            last_downshift_time=-999.0,
+            now=float(i) * 0.05,
+        )
+
+    assert detector.effective_redline(telemetry()) == 6800.0
+    assert detector.dump(car_key)["confidence"] == 0.9
+
+
+def test_rev_limiter_persists_metadata_and_loads_legacy_float():
+    car_key = telemetry().car_key
+    detector = RevLimiterDetector()
+    detector.load(car_key, 7400.0)
+
+    dumped = detector.dump(car_key)
+    assert dumped == {"rpm": 7400.0, "confidence": 0.45, "source": "legacy"}
+
+    restored = RevLimiterDetector()
+    restored.load(car_key, dumped)
+
+    assert restored.effective_redline(telemetry()) == 7400.0
+    assert restored.dump(car_key) == dumped
 
 
 def test_race_track_brake_accepts_sustained_medium_brake(tmp_path):
