@@ -954,6 +954,9 @@ class TCULogic:
         if self.mode in (Mode.RACE, Mode.OFFROAD) and self._fuel_cut_escape_upshift(td, now):
             return
 
+        if self.mode == Mode.OFFROAD and self._low_gear_limiter_guard_upshift(td, now):
+            return
+
         min_sensible_speed = self._min_sensible_speed_for_gear(td)
         if td.gear >= 2 and td.speed_kmh < min_sensible_speed and td.rpm_pct < 0.40:
             if self._race_wheel_speed_untrusted(td, now):
@@ -1083,7 +1086,7 @@ class TCULogic:
         return True
 
     def _low_gear_limiter_guard_ready(self, td: Telemetry, now: float) -> tuple[bool, float]:
-        if self.mode != Mode.RACE:
+        if self.mode not in (Mode.RACE, Mode.OFFROAD):
             return False, 0.0
         if td.gear != 1 or td.engine_max_rpm <= 0:
             return False, 0.0
@@ -1091,43 +1094,61 @@ class TCULogic:
             return False, 0.0
         if self._pending_upshift_gear is not None:
             return False, 0.0
+        if (
+            self.mode == Mode.OFFROAD
+            and self._config.get("feat_airtime_lock")
+            and self._airtime.is_airborne
+        ):
+            return False, 0.0
 
         learned = self._rev_limiter.effective_redline(td)
         if learned is not None:
-            guard_rpm = max(td.engine_max_rpm * 0.82, learned - 500.0)
+            min_guard_pct = 0.82 if self.mode == Mode.RACE else 0.80
+            limiter_gap = 500.0 if self.mode == Mode.RACE else 700.0
+            guard_rpm = max(td.engine_max_rpm * min_guard_pct, learned - limiter_gap)
         else:
-            guard_rpm = td.engine_max_rpm * 0.88
+            guard_rpm = td.engine_max_rpm * (0.88 if self.mode == Mode.RACE else 0.82)
         return td.current_rpm >= guard_rpm, guard_rpm
 
     def _low_gear_limiter_guard_upshift(self, td: Telemetry, now: float) -> bool:
         ready, guard_rpm = self._low_gear_limiter_guard_ready(td, now)
         if not ready:
             return False
-        if self._race_wheel_speed_untrusted(td, now):
+        wheel_speed_untrusted = self._race_wheel_speed_untrusted(td, now)
+        if wheel_speed_untrusted and self.mode == Mode.RACE:
             return self._race_wheel_speed_hold(td, now, "limiter guard")
 
         blocked_by_airtime = self._config.get("feat_airtime_lock") and self._airtime.is_airborne
         blocked_by_upshift_lock = now < self._no_upshift_until
         blocked_by_cornering = self._cornering_locked
-        if not (blocked_by_airtime or blocked_by_upshift_lock or blocked_by_cornering):
+        blocked_by_slip = self.mode == Mode.OFFROAD and wheel_speed_untrusted
+        blocked = (
+            blocked_by_airtime
+            or blocked_by_upshift_lock
+            or blocked_by_cornering
+            or blocked_by_slip
+        )
+        if not blocked:
             return False
 
         old_no_upshift_until = self._no_upshift_until
         old_lock_until = self._lock_until
         self._no_upshift_until = min(self._no_upshift_until, now)
         self._lock_until = min(self._lock_until, now)
+        downshift_lock_s = 1.10 if self.mode == Mode.OFFROAD else 0.65
         shifted = self._shift_up(
             td,
             260,
             "UPSHIFT",
             "low gear limiter guard",
-            downshift_lock_s=0.65,
+            downshift_lock_s=downshift_lock_s,
             allow_cornering_locked=True,
-            allow_airborne_locked=True,
+            allow_airborne_locked=self.mode == Mode.RACE,
             decision_extra={
                 "low_gear_limiter_guard": True,
                 "guard_rpm": round(guard_rpm, 1),
                 "airborne_guard": bool(blocked_by_airtime),
+                "wheel_speed_untrusted": bool(blocked_by_slip),
                 "previous_no_upshift_until_s": round(
                     max(0.0, old_no_upshift_until - now),
                     3,
@@ -1137,6 +1158,9 @@ class TCULogic:
         if not shifted:
             self._no_upshift_until = old_no_upshift_until
             self._lock_until = old_lock_until
+        elif blocked_by_slip:
+            self._race_slip_hold_until = max(self._race_slip_hold_until, now + 1.10)
+            self._no_downshift_until = max(self._no_downshift_until, now + 1.10)
         return shifted
 
     def _fuel_cut_escape_upshift(self, td: Telemetry, now: float) -> bool:
@@ -1163,14 +1187,17 @@ class TCULogic:
         old_no_upshift_until = self._no_upshift_until
         self._no_upshift_until = min(self._no_upshift_until, now)
         hold_after_escape = (
-            self.mode == Mode.RACE and td.max_combined_slip >= 4.0 and td.throttle >= 0.55
+            self.mode in (Mode.RACE, Mode.OFFROAD)
+            and td.max_combined_slip >= 4.0
+            and td.throttle >= 0.55
         )
+        downshift_lock_s = 1.10 if self.mode == Mode.OFFROAD and hold_after_escape else 0.65
         shifted = self._shift_up(
             td,
             260,
             "FUEL CUT",
             "escape",
-            downshift_lock_s=0.65,
+            downshift_lock_s=downshift_lock_s,
             allow_cornering_locked=True,
             allow_airborne_locked=True,
             decision_extra={
@@ -1178,12 +1205,16 @@ class TCULogic:
                 "escape_rpm": round(escape_rpm, 1),
                 "previous_no_upshift_until_s": round(max(0.0, old_no_upshift_until - now), 3),
                 "race_slip_hold_after_escape": hold_after_escape,
+                "slip_hold_after_escape": hold_after_escape,
             },
         )
         if not shifted:
             self._no_upshift_until = old_no_upshift_until
         elif hold_after_escape:
-            self._race_slip_hold_until = max(self._race_slip_hold_until, now + 0.70)
+            hold_s = 1.10 if self.mode == Mode.OFFROAD else 0.70
+            self._race_slip_hold_until = max(self._race_slip_hold_until, now + hold_s)
+            if self.mode == Mode.OFFROAD:
+                self._no_downshift_until = max(self._no_downshift_until, now + hold_s)
         return shifted
 
     def _upshift_blocked_by_top_gear(self, td: Telemetry) -> bool:
@@ -1698,7 +1729,7 @@ class TCULogic:
         return td.speed_kmh > Cfg.MIN_SPEED_KMH
 
     def _race_first_gear_traction_hold(self, td: Telemetry, now: float) -> bool:
-        if self.mode != Mode.RACE or td.gear != 1 or td.engine_max_rpm <= 0:
+        if self.mode not in (Mode.RACE, Mode.OFFROAD) or td.gear != 1 or td.engine_max_rpm <= 0:
             return False
         if td.throttle < 0.80 or td.brake > 0.05 or td.speed_kmh <= Cfg.MIN_SPEED_KMH:
             return False
@@ -1736,7 +1767,7 @@ class TCULogic:
         return True
 
     def _race_wheel_speed_untrusted(self, td: Telemetry, now: float) -> bool:
-        if self.mode != Mode.RACE:
+        if self.mode not in (Mode.RACE, Mode.OFFROAD):
             return False
         if td.gear < 1 or td.engine_max_rpm <= 0 or td.speed_kmh <= Cfg.MIN_SPEED_KMH:
             return False
@@ -1755,11 +1786,15 @@ class TCULogic:
         self._tcu_state = "TRACTION HOLD"
         self._tcu_state_sub = f"wheel speed untrusted ({reason})"
         self._no_upshift_until = max(self._no_upshift_until, now + 0.20)
-        self._shift_outcome.cancel_pending()
+        if self.mode == Mode.OFFROAD:
+            self._no_downshift_until = max(self._no_downshift_until, now + 0.45)
+        else:
+            self._shift_outcome.cancel_pending()
         if now - self._last_race_slip_hold_log_at >= 0.35:
             self._last_race_slip_hold_log_at = now
+            event = "race_slip_hold" if self.mode == Mode.RACE else "offroad_slip_hold"
             self._record_decision(
-                "race_slip_hold",
+                event,
                 td,
                 hold_reason=reason,
                 hold_until_s=round(max(0.0, self._race_slip_hold_until - now), 3),
@@ -3149,7 +3184,7 @@ class TCULogic:
             allow_skip=True,
             cascade_lock_s=0.42,
             upshift_lock_s=0.95,
-            block_spin=False,
+            block_spin=True,
         ):
             return
 

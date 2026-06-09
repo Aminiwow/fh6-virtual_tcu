@@ -748,6 +748,172 @@ def test_offroad_ground_fuel_cut_escape_shifts_before_mode_logic(tmp_path):
     assert tcu._tcu_state == "FUEL CUT"
 
 
+def test_offroad_low_gear_limiter_guard_bypasses_upshift_lock_on_ground(tmp_path):
+    tcu, output = make_tcu(tmp_path, "OFFROAD")
+    car_key = (4198, 4, 800)
+    tcu._current_car_key = car_key
+    tcu._no_upshift_until = time.time() + 1.2
+    events = []
+    tcu._logger.record_decision = events.append
+
+    tcu.process(
+        telemetry(
+            car_ordinal=car_key[0],
+            car_class=car_key[1],
+            pi=car_key[2],
+            engine_max_rpm=8000.0,
+            current_rpm=6650.0,
+            gear=1,
+            speed_ms=95.0 / 3.6,
+            accel_raw=255,
+            power_w=620000.0,
+            slip_fl=0.5,
+            slip_fr=0.4,
+            slip_rl=0.4,
+            slip_rr=0.3,
+        )
+    )
+
+    assert output.up == 1
+    assert tcu._tcu_state == "UPSHIFT"
+    assert tcu._tcu_state_sub == "low gear limiter guard"
+    assert events[-1]["low_gear_limiter_guard"] is True
+    assert events[-1]["airborne_guard"] is False
+
+
+def test_offroad_airborne_low_gear_limiter_guard_stays_locked(tmp_path):
+    tcu, output = make_tcu(tmp_path, "OFFROAD")
+    tcu._airtime._is_airborne = True
+
+    tcu.process(
+        telemetry(
+            car_ordinal=4198,
+            car_class=4,
+            pi=800,
+            engine_max_rpm=8000.0,
+            current_rpm=7050.0,
+            gear=1,
+            speed_ms=95.0 / 3.6,
+            accel_raw=255,
+            power_w=620000.0,
+            accel_y=-12.0,
+            suspension_norm_fl=0.0,
+            suspension_norm_fr=0.0,
+            suspension_norm_rl=0.0,
+            suspension_norm_rr=0.0,
+        )
+    )
+
+    assert output.up == 0
+    assert tcu._tcu_state == "AIRBORNE"
+
+
+def test_offroad_first_gear_wheelspin_holds_before_limiter_guard(tmp_path):
+    tcu, output = make_tcu(tmp_path, "OFFROAD")
+    car_key = (4198, 4, 800)
+    tcu._current_car_key = car_key
+    tcu._calibrator._ratios[car_key] = {1: 3.50, 2: 2.68}
+    tcu._calibrator._counts[car_key] = {1: 8, 2: 8}
+    tcu._calibrator._wheel_radius[car_key] = 0.34
+    tcu._calibrator._wheel_radius_counts[car_key] = 8
+    tcu._performance_upshift_target_pct = lambda _td, _offset: (0.80, "power ceiling")
+    events = []
+    tcu._logger.record_decision = events.append
+
+    shifted_or_held = tcu._track_upshift_in_band(
+        telemetry(
+            car_ordinal=car_key[0],
+            car_class=car_key[1],
+            pi=car_key[2],
+            engine_max_rpm=8000.0,
+            current_rpm=6400.0,
+            gear=1,
+            speed_ms=32.0 / 3.6,
+            accel_raw=255,
+            power_w=620000.0,
+            slip_fl=25.0,
+            slip_fr=24.0,
+            slip_rl=23.0,
+            slip_rr=22.0,
+        ),
+        time.time(),
+        offset=0.07,
+    )
+
+    assert shifted_or_held
+    assert output.up == 0
+    assert tcu._tcu_state == "TRACTION HOLD"
+    assert events[-1]["event"] == "traction_hold"
+
+
+def test_offroad_limiter_guard_releases_wheelspin_at_high_rpm(tmp_path):
+    tcu, output = make_tcu(tmp_path, "OFFROAD")
+    car_key = (4198, 4, 800)
+    tcu._current_car_key = car_key
+    tcu._no_upshift_until = time.time() + 1.2
+    events = []
+    tcu._logger.record_decision = events.append
+
+    tcu.process(
+        telemetry(
+            car_ordinal=car_key[0],
+            car_class=car_key[1],
+            pi=car_key[2],
+            engine_max_rpm=8000.0,
+            current_rpm=6650.0,
+            gear=1,
+            speed_ms=42.0 / 3.6,
+            accel_raw=255,
+            power_w=620000.0,
+            slip_fl=18.0,
+            slip_fr=17.0,
+            slip_rl=16.0,
+            slip_rr=15.0,
+        )
+    )
+
+    assert output.up == 1
+    assert tcu._tcu_state == "UPSHIFT"
+    assert events[-1]["low_gear_limiter_guard"] is True
+    assert events[-1]["wheel_speed_untrusted"] is True
+    assert tcu._no_downshift_until > time.time()
+
+
+def test_offroad_slip_hold_blocks_torque_down_after_escape(tmp_path):
+    tcu, output = make_tcu(tmp_path, "OFFROAD")
+    car_key = (4198, 4, 800)
+    tcu._current_car_key = car_key
+    seed_ratios(tcu, car_key)
+    tcu._race_slip_hold_until = time.time() + 0.7
+    events = []
+    tcu._logger.record_decision = events.append
+
+    tcu._mode_offroad(
+        telemetry(
+            car_ordinal=car_key[0],
+            car_class=car_key[1],
+            pi=car_key[2],
+            engine_max_rpm=8000.0,
+            current_rpm=3600.0,
+            gear=2,
+            speed_ms=58.0 / 3.6,
+            accel_raw=255,
+            power_w=320000.0,
+            slip_fl=1.0,
+            slip_fr=0.9,
+            slip_rl=0.8,
+            slip_rr=0.7,
+        ),
+        time.time(),
+    )
+
+    assert output.down == 0
+    assert output.double_down == 0
+    assert tcu._tcu_state == "TRACTION HOLD"
+    assert events[-1]["event"] == "offroad_slip_hold"
+    assert events[-1]["hold_reason"] == "power down"
+
+
 def test_unresponsive_high_gear_upshift_blocks_repeat_commands(tmp_path):
     tcu, output = make_tcu(tmp_path, "OFFROAD")
     car_key = (4197, 7, 999)
